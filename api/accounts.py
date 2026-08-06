@@ -117,6 +117,7 @@ class AccountExportRequest(BaseModel):
 class AccountUpdateRequest(BaseModel):
     id: str = ""
     access_token: str = ""
+    refresh_token: str = ""
     type: str | None = None
     source_type: str | None = None
     quota: int | None = None
@@ -1919,6 +1920,7 @@ def create_router() -> APIRouter:
     async def update_account(body: AccountUpdateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         account_id = _clean_text(body.id).lower()
+        uses_management_id = bool(account_id)
         legacy_token = _clean_text(body.access_token)
         if account_id:
             current = _get_account_by_id(account_id)
@@ -1940,6 +1942,13 @@ def create_router() -> APIRouter:
             }.items()
             if value is not None
         }
+        if uses_management_id:
+            replacement_access_token = _clean_text(body.access_token)
+            replacement_refresh_token = _clean_text(body.refresh_token)
+            if replacement_access_token:
+                updates["access_token"] = replacement_access_token
+            if replacement_refresh_token:
+                updates["refresh_token"] = replacement_refresh_token
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "no updates provided"})
         access_token = _clean_text(current.get("access_token"))

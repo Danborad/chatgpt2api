@@ -13,7 +13,9 @@ import type { useAccountBulkProgressRuntime } from './accountBulkProgressRuntime
 
 export type AccountForm = {
   id: string
+  email: string
   access_token: string
+  refresh_token: string
   type: string
   source_type: AccountSourceType
   group_id: string
@@ -33,7 +35,9 @@ type AccountCrudRuntimeOptions = {
 function createDefaultForm(): AccountForm {
   return {
     id: '',
+    email: '',
     access_token: '',
+    refresh_token: '',
     type: '',
     source_type: 'web',
     group_id: '',
@@ -129,7 +133,9 @@ export function useAccountCrudRuntime(options: AccountCrudRuntimeOptions) {
       ])
       if (editingId.value !== item.id) return
       form.id = detail.id
+      form.email = detail.email
       form.access_token = ''
+      form.refresh_token = ''
       form.type = detail.configuration.type
       form.source_type = (detail.configuration.source_type || detail.source) as AccountSourceType
       form.group_id = detail.configuration.group_id
@@ -163,7 +169,8 @@ export function useAccountCrudRuntime(options: AccountCrudRuntimeOptions) {
       const payloadId = editingId.value || form.id || undefined
       const result = await accountsApi.upsert({
         id: payloadId,
-        access_token: isEditing ? undefined : form.access_token.trim(),
+        access_token: form.access_token.trim() || undefined,
+        refresh_token: form.refresh_token.trim() || undefined,
         type: form.type.trim(),
         source_type: form.source_type,
         group_id: form.group_id.trim(),

@@ -3227,6 +3227,55 @@ class AccountService:
                 and self._remote_check_marker(current) != expected_remote_check_marker
             ):
                 return None
+            normalized_updates = dict(updates)
+            replacement_access_token = str(
+                normalized_updates.pop("access_token", "") or ""
+            ).strip()
+            next_access_token = replacement_access_token or access_token
+            resolved_replacement = self._resolve_access_token_locked(next_access_token)
+            if (
+                next_access_token != access_token
+                and resolved_replacement in self._accounts
+                and resolved_replacement != access_token
+            ):
+                raise ValueError("access token already belongs to another account")
+
+            refresh_token_changed = (
+                "refresh_token" in normalized_updates
+                and str(normalized_updates.get("refresh_token") or "").strip()
+                != str(current.get("refresh_token") or "").strip()
+            )
+            credentials_changed = next_access_token != access_token or refresh_token_changed
+            if credentials_changed:
+                self._scrub_diagnostic_secrets(
+                    normalized_updates,
+                    [
+                        current.get("access_token"),
+                        current.get("refresh_token"),
+                        current.get("id_token"),
+                    ],
+                )
+                normalized_updates.update({
+                    "last_token_refresh_error": None,
+                    "last_token_refresh_error_at": None,
+                    "last_refresh_error": None,
+                    "last_refresh_error_at": None,
+                    "last_invalid_at": None,
+                    "invalid_count": 0,
+                })
+                if refresh_token_changed:
+                    normalized_updates["refresh_token_invalid_at"] = None
+                if current.get("last_remote_check_result") == "invalid":
+                    normalized_updates.update({
+                        "last_remote_check_result": None,
+                        "last_remote_check_error": None,
+                        "last_remote_check_error_at": None,
+                        "last_remote_check_event": None,
+                        "pending_auth_remove_invalid": None,
+                        "pending_auth_scope": None,
+                    })
+                if current.get("status") == "异常":
+                    normalized_updates["status"] = "正常"
             expected_generation = None
             if expected_access_token is not None and expected_refresh_token is not None:
                 expected_generation = (
@@ -3239,9 +3288,9 @@ class AccountService:
                     ),
                 )
             account, auto_remove_message = self._normalized_account_update_locked(
-                access_token,
+                next_access_token,
                 current,
-                updates,
+                normalized_updates,
                 preserve_disabled=preserve_disabled,
             )
             if account is None:
@@ -3260,13 +3309,25 @@ class AccountService:
                     {"token": anonymize_token(access_token)},
                 )
                 return None
-            self._accounts[access_token] = account
+            rotated = next_access_token != access_token
+            alias_sources = {
+                source
+                for source in {access_token, *self._token_aliases}
+                if self._resolve_access_token_locked(source) == access_token
+            }
+            if rotated:
+                self._accounts.pop(access_token, None)
+            self._accounts[next_access_token] = account
             saved = self._save_accounts(
                 expected_credential_generation=expected_generation,
             )
             if not saved:
                 return None
-            access_token = self._resolve_access_token_locked(access_token)
+            if rotated:
+                self._token_aliases.pop(next_access_token, None)
+                self._move_account_runtime_token_locked(next_access_token, alias_sources)
+                self._image_slot_condition.notify_all()
+            access_token = self._resolve_access_token_locked(next_access_token)
             persisted = self._accounts.get(access_token)
             if persisted is None:
                 return None

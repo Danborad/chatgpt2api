@@ -275,6 +275,7 @@ export type AccountSelectionPreview = {
 export type AccountUpsertPayload = {
   id?: string
   access_token?: string
+  refresh_token?: string
   type?: string
   source_type?: AccountSourceType
   group_id?: string
@@ -595,6 +596,8 @@ export const accountsApi = {
       const response = await apiClient.post<
         {
           id: string
+          access_token?: string
+          refresh_token?: string
           type?: string
           source_type?: AccountSourceType
           quota?: number
@@ -604,6 +607,8 @@ export const accountsApi = {
         AccountMutationResponse
       >('/api/accounts/update', {
         id: accountId,
+        access_token: payload.access_token,
+        refresh_token: payload.refresh_token,
         type: payload.type,
         source_type: payload.source_type,
         quota: payload.quota,
@@ -630,6 +635,7 @@ export const accountsApi = {
       tokens: [],
       accounts: [{
         access_token: accessToken,
+        refresh_token: cleanString(payload.refresh_token) || undefined,
         type: payload.type,
         source_type: payload.source_type,
         status: STATUS_NORMAL,

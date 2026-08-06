@@ -255,12 +255,48 @@
         />
 
             <ModalBody density="compact" class="space-y-3">
-                <FormSection title="基础信息" surface="plain">
+                <FormSection v-if="editingId" title="账号身份" surface="plain">
                   <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                    <label v-if="editingId" class="text-xs">
-                      <span class="ui-field-label">账号 ID</span>
-                      <Input :model-value="form.id" disabled block />
+                    <label class="text-xs">
+                      <span class="ui-field-label">邮箱</span>
+                      <Input :model-value="form.email || '未获取'" disabled block />
                     </label>
+                    <label class="text-xs">
+                      <span class="ui-field-label">管理 ID</span>
+                      <Input :model-value="form.id" disabled block root-class="font-mono" />
+                    </label>
+                  </div>
+                </FormSection>
+
+                <FormSection title="账号凭据" surface="plain">
+                  <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                  <label class="block text-xs">
+                    <span class="ui-field-label">AT{{ editingId ? '' : '（必填）' }}</span>
+                    <textarea
+                      v-model.trim="form.access_token"
+                      rows="3"
+                      class="ui-textarea-sm font-mono"
+                      :placeholder="editingId ? '留空表示不修改' : '粘贴完整 access token'"
+                      autocomplete="off"
+                      spellcheck="false"
+                    ></textarea>
+                  </label>
+                  <label class="block text-xs">
+                    <span class="ui-field-label">RT（可选）</span>
+                    <textarea
+                      v-model.trim="form.refresh_token"
+                      rows="3"
+                      class="ui-textarea-sm font-mono"
+                      :placeholder="editingId ? '留空表示不修改' : '粘贴 refresh token'"
+                      autocomplete="off"
+                      spellcheck="false"
+                    ></textarea>
+                  </label>
+                  </div>
+                </FormSection>
+
+                <FormSection title="账号设置" surface="plain">
+                  <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <label class="text-xs">
                       <span class="ui-field-label">套餐</span>
                       <Input
@@ -270,23 +306,6 @@
                         @update:model-value="form.type = $event.trim()"
                       />
                     </label>
-                  </div>
-                </FormSection>
-
-                <FormSection v-if="!editingId" surface="plain">
-                  <label class="block text-xs">
-                    <span class="ui-field-label">Access Token（必填）</span>
-                    <textarea
-                      v-model.trim="form.access_token"
-                      rows="3"
-                      class="ui-textarea-sm font-mono"
-                      placeholder="粘贴完整 access token"
-                    ></textarea>
-                  </label>
-                </FormSection>
-
-                <FormSection title="调度属性" surface="plain">
-                  <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
                     <div class="text-xs">
                       <span class="ui-field-label">来源</span>
                       <GroupedSelectMenu
@@ -319,7 +338,7 @@
                         block
                       />
                     </label>
-                    <div class="space-y-2 text-xs md:col-span-3">
+                    <div class="space-y-2 text-xs md:col-span-2">
                       <div class="grid grid-cols-1 gap-2 md:grid-cols-[11rem_minmax(0,1fr)]">
                         <label>
                           <span class="ui-field-label">代理模式</span>
