@@ -916,7 +916,7 @@ const headerServiceItems: HeaderServiceItem[] = [
   {
     key: 'service-api',
     label: '生图 API',
-    detail: '个人 ¥0.02/张 · 中转 ¥0.01/张 · 大量/企业 ¥0.009/张',
+    detail: '小量 ¥0.02/张 · 中转 ¥0.01/张 · 大量/企业 ¥0.009/张',
     href: 'https://api.klong.lat',
     icon: 'lucide:badge-dollar-sign',
   },

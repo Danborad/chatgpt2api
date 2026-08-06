@@ -36,7 +36,7 @@
 <p align="center">
   <a href="https://qm.qq.com/q/yegwCqJisS">QQ 交流群：1005859624</a>
   &nbsp;&nbsp;·&nbsp;&nbsp; <a href="https://pay.ldxp.cn/shop/yukkcat">购买生图账号</a>
-  &nbsp;&nbsp;·&nbsp;&nbsp; <a href="https://api.klong.lat">生图 API：个人 ¥0.02/张 · 中转 ¥0.01/张 · 大量/企业 ¥0.009/张</a>
+  &nbsp;&nbsp;·&nbsp;&nbsp; <a href="https://api.klong.lat">生图 API：小量 ¥0.02/张 · 中转 ¥0.01/张 · 大量/企业 ¥0.009/张</a>
 </p>
 
 ## 快速部署
