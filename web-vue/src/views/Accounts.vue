@@ -553,7 +553,7 @@
             <ModalHeader title="导入账号" :close-disabled="importModalBusy" compact @close="closeImportModal" />
 
             <div class="grid grid-cols-1 gap-0 md:grid-cols-[15rem_1fr]">
-              <div class="border-b border-border bg-muted/20 p-3 md:border-b-0 md:border-r">
+              <div class="flex flex-col border-b border-border bg-muted/20 p-3 md:border-b-0 md:border-r">
                 <div class="space-y-1">
                   <button
                     v-for="option in importModeOptions"
@@ -567,6 +567,13 @@
                     {{ option.label }}
                   </button>
                 </div>
+                <AccountImportTargetGroupField
+                  v-model="importTargetGroupValue"
+                  class="mt-3 border-t border-border pt-3"
+                  :groups="accountGroups"
+                  :loading="accountGroupsLoading"
+                  :disabled="importModalBusy"
+                />
               </div>
 
               <div class="min-h-[clamp(26rem,55vh,42rem)] p-4">
@@ -660,7 +667,7 @@
                           target="_blank"
                           rel="noopener noreferrer"
                           class="font-medium text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary"
-                        >https://chatgpt.com/api/auth/session</a>，复制完整 JSON，系统会自动提取 accessToken；该接口通常不包含长期 refresh_token。
+                        >https://chatgpt.com/api/auth/session</a>，复制完整 JSON，系统会保留其中的 AT、RT 和 ID Token；该接口通常不包含长期 RT。
                       </p>
                     </template>
                   </ImportModePanel>
@@ -678,20 +685,22 @@
                     description="读取本系统导出的完整账号 JSON，直接恢复已保存的凭据和账号配置，不请求远程接口验证。"
                   />
                   <StateBlock dashed compact>
-                    <Button size="sm" variant="outline" :disabled="importBusy" @click="openCPAFileDialog">
+                    <Button size="sm" variant="outline" :disabled="importBusy" @click="openAccountFileDialog">
                       选择备份 JSON 文件
                     </Button>
                   </StateBlock>
                 </div>
 
-                <div v-else-if="importMode === 'cpa_json'" class="space-y-3">
+                <div v-else-if="importMode === 'cpa_json' || importMode === 'sub2api_json'" class="space-y-3">
                   <ImportModePanel
-                    title="导入 CPA JSON 文件"
-                    description="从一个或多个 CPA JSON 文件提取账号凭据，并请求远程接口验证、同步账号信息与额度。"
+                    :title="importMode === 'sub2api_json' ? '导入 Sub2API JSON 文件' : '导入 CPA JSON 文件'"
+                    :description="importMode === 'sub2api_json'
+                      ? '读取 Sub2API 导出的 JSON 文件，提取账号凭据并同步账号信息与额度。'
+                      : '从一个或多个 CPA JSON 文件提取账号凭据，并请求远程接口验证、同步账号信息与额度。'"
                   />
                   <StateBlock dashed compact>
-                    <Button size="sm" variant="outline" :disabled="importBusy" @click="openCPAFileDialog">
-                      选择 CPA JSON 文件
+                    <Button size="sm" variant="outline" :disabled="importBusy" @click="openAccountFileDialog">
+                      选择 {{ importMode === 'sub2api_json' ? 'Sub2API' : 'CPA' }} JSON 文件
                     </Button>
                   </StateBlock>
                 </div>
@@ -700,6 +709,7 @@
                   <RemoteAccountImportPanel
                     mode="cpa"
                     external-tracking
+                    :target-group-id="resolvedImportTargetGroupId"
                     @busy-change="remoteImportBusy = $event"
                     @progress="updateRemoteImportProgress"
                     @started="startRemoteImportTracking"
@@ -710,6 +720,7 @@
                   <RemoteAccountImportPanel
                     mode="sub2api"
                     external-tracking
+                    :target-group-id="resolvedImportTargetGroupId"
                     @busy-change="remoteImportBusy = $event"
                     @progress="updateRemoteImportProgress"
                     @started="startRemoteImportTracking"
@@ -734,7 +745,7 @@
     />
 
     <input ref="manualTokenFileInputRef" type="file" accept=".txt,text/plain" class="hidden" @change="handleManualTokenFileChange" />
-    <input ref="cpaFileInputRef" type="file" accept=".json,application/json" multiple class="hidden" @change="handleCPAFileChange" />
+    <input ref="accountFileInputRef" type="file" accept=".json,application/json" multiple class="hidden" @change="handleAccountFileChange" />
   </div>
 </template>
 
@@ -758,6 +769,7 @@ import StateBlock from '@/components/ai/StateBlock.vue'
 import SurfaceBox from '@/components/ai/SurfaceBox.vue'
 import type { Account } from '@/api/accounts'
 import AccountGridCard from './accounts/AccountGridCard.vue'
+import AccountImportTargetGroupField from './accounts/AccountImportTargetGroupField.vue'
 import AccountOperationDrawer from './accounts/AccountOperationDrawer.vue'
 import AccountTestModal from './accounts/AccountTestModal.vue'
 import AccountTableRow from './accounts/AccountTableRow.vue'
@@ -815,6 +827,7 @@ const {
   showImportModal,
   importMode,
   importModeOptions,
+  importTargetGroupValue,
   oauthEmailHint,
   oauthCallbackText,
   oauthSessionId,
@@ -887,7 +900,7 @@ const {
   openOAuthAuthorizeUrl,
   copyOAuthAuthorizeUrl,
   finishOAuthLogin,
-  importLocalCPAFiles,
+  importLocalAccountFiles,
   updateRemoteImportProgress,
   startRemoteImportTracking,
   requestStopRefreshProgress,
@@ -921,7 +934,7 @@ watch(
 )
 
 const manualTokenFileInputRef = ref<HTMLInputElement | null>(null)
-const cpaFileInputRef = ref<HTMLInputElement | null>(null)
+const accountFileInputRef = ref<HTMLInputElement | null>(null)
 const remoteImportBusy = ref(false)
 const accountToolbarMenuClass = 'shrink-0 whitespace-nowrap'
 const accountToolbarButtonClass = 'shrink-0 whitespace-nowrap justify-between gap-2'
@@ -932,6 +945,9 @@ const accountSourceOptions = [
   { label: 'Codex', value: 'codex' },
 ] as const
 const importModalBusy = computed(() => importBusy.value || remoteImportBusy.value)
+const resolvedImportTargetGroupId = computed(() => (
+  importTargetGroupValue.value === '__preserve__' ? null : importTargetGroupValue.value
+))
 
 const accountGroupNameMap = computed(() => buildAccountGroupNameMap(accountGroups.value))
 
@@ -984,15 +1000,15 @@ async function handleManualTokenFileChange(event: Event) {
   if (target) target.value = ''
 }
 
-function openCPAFileDialog() {
-  if (!cpaFileInputRef.value || importBusy.value) return
-  cpaFileInputRef.value.value = ''
-  cpaFileInputRef.value.click()
+function openAccountFileDialog() {
+  if (!accountFileInputRef.value || importBusy.value) return
+  accountFileInputRef.value.value = ''
+  accountFileInputRef.value.click()
 }
 
-async function handleCPAFileChange(event: Event) {
+async function handleAccountFileChange(event: Event) {
   const target = event.target as HTMLInputElement | null
-  await importLocalCPAFiles(target?.files)
+  await importLocalAccountFiles(target?.files)
   if (target) target.value = ''
 }
 

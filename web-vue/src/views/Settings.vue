@@ -137,7 +137,7 @@
         :sub2api-servers="sub2apiServers"
         :sub2api-loading="sub2apiLoading"
         :sub2api-groups="sub2apiGroups"
-        :sub2api-groups-loading-id="sub2apiGroupsLoadingId"
+        :remote-import-active="remoteImportActive"
         :saving-external-source="savingExternalSource"
         :testing-external-source="testingExternalSource"
         :external-sources-loading="externalSourcesLoading"
@@ -150,7 +150,6 @@
         @create-sub2api="openSub2APIModal"
         @import-sub2api="openSub2APIImport"
         @test-sub2api="testSub2APIServer"
-        @load-sub2api-groups="loadSub2APIGroups"
         @edit-sub2api="editSub2APIServer"
         @delete-sub2api="deleteSub2APIServer"
       />
@@ -210,23 +209,50 @@
         @close="closeRemoteImportModal"
       />
       <ModalBody>
+        <AccountImportTargetGroupField
+          v-model="remoteImportTargetGroupValue"
+          class="mb-4"
+          :groups="remoteImportAccountGroups"
+          :loading="remoteImportAccountGroupsLoading"
+          :disabled="remoteImportBusy"
+        />
         <RemoteAccountImportPanel
           v-if="remoteImportModal === 'cpa'"
           mode="cpa"
+          external-tracking
           :cpa-pool-id="remoteImportCPAPoolId"
+          :target-group-id="resolvedRemoteImportTargetGroupId"
           @busy-change="remoteImportBusy = $event"
-          @imported="handleRemoteImportDone"
+          @progress="handleRemoteImportProgress"
+          @started="handleRemoteImportStarted"
         />
         <RemoteAccountImportPanel
           v-else-if="remoteImportModal === 'sub2api'"
           mode="sub2api"
+          external-tracking
           :sub2api-server-id="remoteImportSub2APIServerId"
           :sub2api-group-id="remoteImportSub2APIGroupId"
+          :target-group-id="resolvedRemoteImportTargetGroupId"
           @busy-change="remoteImportBusy = $event"
-          @imported="handleRemoteImportDone"
+          @progress="handleRemoteImportProgress"
+          @started="handleRemoteImportStarted"
         />
       </ModalBody>
     </ModalShell>
+
+    <AccountOperationDrawer
+      :open="remoteImportShowProgress"
+      :title="remoteImportProgressTitle"
+      :status-text="remoteImportProgressStatusText"
+      :progress="remoteImportProgressState"
+      :percent="remoteImportProgressPercent"
+      :events="remoteImportProgressEvents"
+      :can-stop="remoteImportCanStop"
+      :stop-requested="remoteImportStopRequested"
+      :can-close="remoteImportCanClose"
+      @close="closeRemoteImportProgress"
+      @stop="requestRemoteImportStop"
+    />
 
     <OperationProgressDrawer
       :open="imageStorageOperationProgress.open"
@@ -267,6 +293,8 @@ import ModalBody from '@/components/ai/ModalBody.vue'
 import ModalHeader from '@/components/ai/ModalHeader.vue'
 import ModalShell from '@/components/ai/ModalShell.vue'
 import OperationProgressDrawer from '@/components/ai/OperationProgressDrawer.vue'
+import AccountImportTargetGroupField from '@/views/accounts/AccountImportTargetGroupField.vue'
+import AccountOperationDrawer from '@/views/accounts/AccountOperationDrawer.vue'
 import PageLoadingState from '@/components/ai/PageLoadingState.vue'
 import PagePanel from '@/components/ai/PagePanel.vue'
 import StateBlock from '@/components/ai/StateBlock.vue'
@@ -293,6 +321,8 @@ import { useSettingsExternalSourcesRuntime } from '@/views/settings/settingsExte
 import { useSettingsImageStorageRuntime } from '@/views/settings/settingsImageStorageRuntime'
 import { useSettingsTabRuntime } from '@/views/settings/settingsTabRuntime'
 import { useSettingsUserKeysRuntime } from '@/views/settings/settingsUserKeysRuntime'
+import { useAccountBulkProgressRuntime } from '@/views/accounts/accountBulkProgressRuntime'
+import { useRemoteAccountImportTrackingRuntime } from '@/views/accounts/remoteAccountImportTrackingRuntime'
 import { useNumberSettingField } from '@/views/settings/useNumberSettingField'
 
 defineOptions({ name: 'Settings' })
@@ -353,11 +383,17 @@ const remoteImportModal = externalSourcesRuntime.remoteImportModal
 const remoteImportCPAPoolId = externalSourcesRuntime.remoteImportCPAPoolId
 const remoteImportSub2APIServerId = externalSourcesRuntime.remoteImportSub2APIServerId
 const remoteImportSub2APIGroupId = externalSourcesRuntime.remoteImportSub2APIGroupId
+const remoteImportTargetGroupValue = externalSourcesRuntime.remoteImportTargetGroupValue
 const remoteImportBusy = externalSourcesRuntime.remoteImportBusy
+const remoteImportActive = externalSourcesRuntime.remoteImportActive
+const remoteImportAccountGroups = externalSourcesRuntime.accountGroups
+const remoteImportAccountGroupsLoading = externalSourcesRuntime.accountGroupsLoading
+const resolvedRemoteImportTargetGroupId = computed(() => (
+  remoteImportTargetGroupValue.value === '__preserve__' ? null : remoteImportTargetGroupValue.value
+))
 const cpaPools = externalSourcesRuntime.cpaPools
 const sub2apiServers = externalSourcesRuntime.sub2apiServers
 const sub2apiGroups = externalSourcesRuntime.sub2apiGroups
-const sub2apiGroupsLoadingId = externalSourcesRuntime.sub2apiGroupsLoadingId
 const editingCPAPoolId = externalSourcesRuntime.editingCPAPoolId
 const editingSub2APIId = externalSourcesRuntime.editingSub2APIId
 const cpaForm = externalSourcesRuntime.cpaForm
@@ -372,14 +408,47 @@ const openSub2APIModal = externalSourcesRuntime.openSub2APIModal
 const editSub2APIServer = externalSourcesRuntime.editSub2APIServer
 const saveSub2APIServer = externalSourcesRuntime.saveSub2APIServer
 const deleteSub2APIServer = externalSourcesRuntime.deleteSub2APIServer
-const loadSub2APIGroups = externalSourcesRuntime.loadSub2APIGroups
 const testSub2APIServer = externalSourcesRuntime.testSub2APIServer
 const openCPAImport = externalSourcesRuntime.openCPAImport
 const openSub2APIImport = externalSourcesRuntime.openSub2APIImport
 const closeRemoteImportModal = externalSourcesRuntime.closeRemoteImportModal
 const closeExternalSourceModal = externalSourcesRuntime.closeExternalSourceModal
 const loadExternalSources = externalSourcesRuntime.loadExternalSources
-const handleRemoteImportDone = externalSourcesRuntime.handleRemoteImportDone
+const remoteImportProgress = useAccountBulkProgressRuntime()
+const remoteImportShowProgress = remoteImportProgress.showRefreshProgress
+const remoteImportProgressTitle = remoteImportProgress.refreshProgressTitle
+const remoteImportProgressStatusText = remoteImportProgress.refreshProgressStatusText
+const remoteImportProgressState = remoteImportProgress.refreshProgress
+const remoteImportProgressPercent = remoteImportProgress.refreshProgressPercent
+const remoteImportProgressEvents = remoteImportProgress.operationEvents
+const remoteImportCanStop = remoteImportProgress.canStopRefreshProgress
+const remoteImportStopRequested = remoteImportProgress.bulkStopRequested
+const remoteImportCanClose = remoteImportProgress.canCloseRefreshProgress
+const closeRemoteImportProgress = remoteImportProgress.close
+const requestRemoteImportStop = remoteImportProgress.requestStop
+const remoteImportTracking = useRemoteAccountImportTrackingRuntime({
+  bulkProgress: remoteImportProgress,
+  onFinished: externalSourcesRuntime.handleRemoteImportDone,
+})
+
+async function handleRemoteImportProgress(value: Parameters<typeof remoteImportTracking.updateProgress>[0]) {
+  await remoteImportTracking.updateProgress(value)
+}
+
+async function handleRemoteImportStarted(value: Parameters<typeof remoteImportTracking.start>[0]) {
+  externalSourcesRuntime.applyRemoteImportStarted(value.mode, value.source_id, value.job)
+  externalSourcesRuntime.handoffRemoteImport()
+  await remoteImportTracking.start(value)
+}
+pageRuntime.onActivate(() => {
+  void remoteImportTracking.resume()
+})
+pageRuntime.onShow(() => {
+  void remoteImportTracking.resume()
+})
+pageRuntime.onDeactivate(remoteImportTracking.stop)
+pageRuntime.onHide(remoteImportTracking.stop)
+
 const userKeysRuntime = useSettingsUserKeysRuntime({
   runtime: pageRuntime,
   requestKey: USER_KEYS_REQUEST_KEY,

@@ -36,6 +36,7 @@ from services.account_operation_events import (
     normalize_account_operation_events,
     project_account_operation_presentation,
 )
+from services.account_import_job import RemoteImportJobConflictError
 from services.account_test_service import account_test_service
 from services.account_service import account_service
 from services.account_view import account_detail, account_row, account_status_category
@@ -85,6 +86,7 @@ class AccountCreateRequest(BaseModel):
     refresh: bool | None = None
     restore: bool = False
     return_items: bool = True
+    target_group_id: str | None = None
 
 
 class AccountDeleteRequest(BaseModel):
@@ -161,6 +163,7 @@ class CPAPoolUpdateRequest(BaseModel):
 
 class CPAImportRequest(BaseModel):
     names: list[str] = Field(default_factory=list)
+    target_group_id: str | None = None
 
 
 class Sub2APIServerCreateRequest(BaseModel):
@@ -191,6 +194,7 @@ class Sub2APIImportRequest(BaseModel):
     account_ids: list[str] = Field(default_factory=list)
     group_bindings: list[Sub2APIImportGroupBinding] = Field(default_factory=list)
     create_account_groups: bool = True
+    target_group_id: str | None = None
 
 
 class OAuthLoginStartRequest(BaseModel):
@@ -202,6 +206,7 @@ class OAuthLoginFinishRequest(BaseModel):
     """提交 callback。callback 既可以是完整 URL 也可以只填 code。"""
     session_id: str = ""
     callback: str = ""
+    target_group_id: str | None = None
 
 
 def _account_payload_token(item: dict[str, Any]) -> str:
@@ -245,6 +250,17 @@ def _config_dict_list(key: str) -> list[dict[str, Any]]:
 
 def _account_group_id(value: object) -> str:
     return _slug_id(value)
+
+
+def _target_account_group_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    group_id = _account_group_id(value)
+    if not group_id:
+        return ""
+    if not any(group.get("id") == group_id for group in _account_group_payload()["groups"]):
+        raise HTTPException(status_code=400, detail={"error": "account group not found"})
+    return group_id
 
 
 def _account_group_payload(groups: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -1345,7 +1361,12 @@ def create_router() -> APIRouter:
     @router.post("/api/accounts")
     async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        account_payloads = [item for item in body.accounts if isinstance(item, dict)]
+        target_group_id = _target_account_group_id(body.target_group_id)
+        account_payloads = [
+            {**item, **({"group_id": target_group_id} if target_group_id is not None else {})}
+            for item in body.accounts
+            if isinstance(item, dict)
+        ]
         payload_tokens = [_account_payload_token(item) for item in account_payloads]
         tokens = _unique_tokens([*body.tokens, *payload_tokens])
         if not tokens:
@@ -1361,19 +1382,33 @@ def create_router() -> APIRouter:
                 payload_token_set = set(_unique_tokens(payload_tokens))
                 extra_tokens = [token for token in tokens if token not in payload_token_set]
                 if extra_tokens:
-                    extra_result = await run_in_threadpool(
-                        account_service.add_accounts,
-                        extra_tokens,
-                        return_items=False,
-                    )
+                    if target_group_id is None:
+                        extra_result = await run_in_threadpool(
+                            account_service.add_accounts,
+                            extra_tokens,
+                            return_items=False,
+                        )
+                    else:
+                        extra_result = await run_in_threadpool(
+                            account_service.add_account_items,
+                            [{"access_token": token, "group_id": target_group_id} for token in extra_tokens],
+                            return_items=False,
+                        )
                     result["added"] = int(result.get("added") or 0) + int(extra_result.get("added") or 0)
                     result["skipped"] = int(result.get("skipped") or 0) + int(extra_result.get("skipped") or 0)
             else:
-                result = await run_in_threadpool(
-                    account_service.add_accounts,
-                    tokens,
-                    return_items=False,
-                )
+                if target_group_id is None:
+                    result = await run_in_threadpool(
+                        account_service.add_accounts,
+                        tokens,
+                        return_items=False,
+                    )
+                else:
+                    result = await run_in_threadpool(
+                        account_service.add_account_items,
+                        [{"access_token": token, "group_id": target_group_id} for token in tokens],
+                        return_items=False,
+                    )
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
@@ -2136,6 +2171,9 @@ def create_router() -> APIRouter:
             "id_token": tokens["id_token"],
             "source_type": "web",
         }
+        target_group_id = _target_account_group_id(body.target_group_id)
+        if target_group_id is not None:
+            payload["group_id"] = target_group_id
         add_result = await run_in_threadpool(
             account_service.add_account_items,
             [payload],
@@ -2210,7 +2248,14 @@ def create_router() -> APIRouter:
         if pool is None:
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
         try:
-            job = cpa_import_service.start_import(pool, body.names)
+            target_group_id = _target_account_group_id(body.target_group_id)
+            job = cpa_import_service.start_import(
+                pool,
+                body.names,
+                target_group_id=target_group_id,
+            )
+        except RemoteImportJobConflictError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return {"import_job": job}
@@ -2317,7 +2362,10 @@ def create_router() -> APIRouter:
                 body.account_ids,
                 group_bindings=[binding.model_dump() for binding in body.group_bindings],
                 create_account_groups=body.create_account_groups,
+                target_group_id=_target_account_group_id(body.target_group_id),
             )
+        except RemoteImportJobConflictError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return {"import_job": job}

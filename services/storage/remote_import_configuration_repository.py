@@ -13,9 +13,8 @@ from services.application_database import (
     initialize_application_database,
     resolve_database_url,
 )
-
-
 REMOTE_IMPORT_PROVIDERS = frozenset({"cpa", "sub2api"})
+REMOTE_IMPORT_LOCK_KEY = "remote_import_configuration:global"
 
 
 class RemoteImportConfigurationModel(DatabaseBase):
@@ -48,13 +47,13 @@ class RemoteImportConfigurationRepository:
             raise TypeError("remote import configuration must be a list")
         return copy.deepcopy([item for item in value if isinstance(item, dict)])
 
-    def _lock(self, session: Any, provider: str) -> None:
+    def _lock(self, session: Any, _provider: str) -> None:
         if self.engine.dialect.name == "sqlite":
             session.execute(text("BEGIN IMMEDIATE"))
         elif self.engine.dialect.name == "postgresql":
             session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-                {"key": f"remote_import_configuration:{provider}"},
+                {"key": REMOTE_IMPORT_LOCK_KEY},
             )
 
     def load(self, provider: str) -> list[dict[str, Any]]:
@@ -106,3 +105,51 @@ class RemoteImportConfigurationRepository:
     def replace(self, provider: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         payload = self._items(items)
         return self.update(provider, lambda _current: payload)
+
+    def update_all(
+        self,
+        updater: Callable[
+            [dict[str, list[dict[str, Any]]]],
+            dict[str, list[dict[str, Any]]],
+        ],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Atomically update the existing remote-import configuration rows."""
+
+        session = self.Session()
+        try:
+            self._lock(session, "")
+            rows = (
+                session.query(RemoteImportConfigurationModel)
+                .filter(RemoteImportConfigurationModel.provider.in_(REMOTE_IMPORT_PROVIDERS))
+                .with_for_update()
+                .all()
+            )
+            current = {
+                str(row.provider): self._items(row.items)
+                for row in rows
+            }
+            updated = updater(copy.deepcopy(current))
+            if not isinstance(updated, dict):
+                raise TypeError("remote import configuration updater must return a mapping")
+            if set(updated) != set(current):
+                raise ValueError("remote import configuration providers cannot change")
+
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                provider = str(row.provider)
+                items = self._items(updated[provider])
+                if row.items == items:
+                    continue
+                row.items = items
+                row.revision = max(0, int(row.revision or 0)) + 1
+                row.updated_at = now
+            session.commit()
+            return {
+                provider: self._items(items)
+                for provider, items in updated.items()
+            }
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()

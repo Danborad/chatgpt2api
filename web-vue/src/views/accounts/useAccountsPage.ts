@@ -214,11 +214,13 @@ export function useAccountsPage() {
     normalizeErrorMessage,
     setError,
     loadData,
+    loadGroups: loadAccountGroups,
   })
   const importBusy = accountImport.importBusy
   const showImportModal = accountImport.showImportModal
   const importMode = accountImport.importMode
   const importModeOptions = accountImport.importModeOptions
+  const importTargetGroupValue = accountImport.importTargetGroupValue
   const oauthEmailHint = accountImport.oauthEmailHint
   const oauthCallbackText = accountImport.oauthCallbackText
   const oauthSessionId = accountImport.oauthSessionId
@@ -316,7 +318,7 @@ export function useAccountsPage() {
   const openOAuthAuthorizeUrl = accountImport.openOAuthAuthorizeUrl
   const copyOAuthAuthorizeUrl = accountImport.copyOAuthAuthorizeUrl
   const finishOAuthLogin = accountImport.finishOAuthLogin
-  const importLocalCPAFiles = accountImport.importLocalCPAFiles
+  const importLocalAccountFiles = accountImport.importLocalAccountFiles
   const updateRemoteImportProgress = accountImport.updateRemoteImportProgress
   const startRemoteImportTracking = accountImport.startRemoteImportTracking
   const stopRemoteImportTracking = accountImport.stopRemoteImportTracking
@@ -418,6 +420,7 @@ export function useAccountsPage() {
     showImportModal,
     importMode,
     importModeOptions,
+    importTargetGroupValue,
     oauthEmailHint,
     oauthCallbackText,
     oauthSessionId,
@@ -490,7 +493,7 @@ export function useAccountsPage() {
     openOAuthAuthorizeUrl,
     copyOAuthAuthorizeUrl,
     finishOAuthLogin,
-    importLocalCPAFiles,
+    importLocalAccountFiles,
     updateRemoteImportProgress,
     startRemoteImportTracking,
     requestStopRefreshProgress,

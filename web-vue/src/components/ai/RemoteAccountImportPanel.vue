@@ -69,7 +69,7 @@
       </p>
       <div class="flex flex-wrap items-center gap-2">
         <label
-          v-if="activeMode === 'sub2api'"
+          v-if="activeMode === 'sub2api' && !hasFixedTargetGroup"
           class="flex items-center gap-1.5 text-xs text-muted-foreground"
         >
           <Checkbox
@@ -175,7 +175,7 @@
 
     <div class="flex flex-wrap items-center justify-between gap-3">
       <p class="text-xs text-muted-foreground">{{ importStatusText }}</p>
-      <Button size="xs" variant="primary" :disabled="busy || selectedCount === 0" @click="startImport">
+      <Button size="xs" variant="primary" :disabled="busy || remoteImportActive || selectedCount === 0" @click="startImport">
         {{ busy ? '处理中...' : '导入选中' }}
       </Button>
     </div>
@@ -186,7 +186,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { Button, Checkbox } from 'nanocat-ui'
 import { Icon } from '@iconify/vue'
-import { accountImportsApi } from '@/api/accountImports'
+import { accountImportsApi, remoteImportJobIsActive } from '@/api/accountImports'
 import type {
   CPAImportJob,
   CPAPool,
@@ -226,12 +226,14 @@ const props = withDefaults(defineProps<{
   sub2apiGroupId?: string
   showModeSwitch?: boolean
   externalTracking?: boolean
+  targetGroupId?: string | null
 }>(), {
   cpaPoolId: '',
   sub2apiServerId: '',
   sub2apiGroupId: undefined,
   showModeSwitch: false,
   externalTracking: false,
+  targetGroupId: null,
 })
 
 const emit = defineEmits<{
@@ -266,6 +268,11 @@ const collapsedSub2APIGroups = ref<Record<string, boolean>>({})
 const importSub2APIByGroups = ref(true)
 const importJob = ref<CPAImportJob | null>(null)
 const emittedImportJobIds = new Set<string>()
+const hasFixedTargetGroup = computed(() => props.targetGroupId !== null)
+const remoteImportActive = computed(() => (
+  [...cpaPools.value, ...sub2apiServers.value]
+    .some((source) => remoteImportJobIsActive(source.import_job))
+))
 
 const modeOptions = [
   { label: 'CPA', value: 'cpa' },
@@ -414,6 +421,9 @@ const emptyText = computed(() => {
 })
 
 const importStatusText = computed(() => {
+  if (remoteImportActive.value && !remoteImportJobIsActive(importJob.value)) {
+    return '已有账号导入任务正在运行'
+  }
   const job = importJob.value
   if (!job) return '未开始导入'
   return job.result_message || job.status_label
@@ -536,12 +546,11 @@ async function runBusy(action: () => Promise<void>) {
 
 async function refreshSources(autoLoadItems = false) {
   await runBusy(async () => {
+    await Promise.all([loadCPAPools(), loadSub2APIServers()])
     if (activeMode.value === 'cpa') {
-      await loadCPAPools()
       if (autoLoadItems && selectedCPAPoolId.value) await loadCPAFiles()
       return
     }
-    await loadSub2APIServers()
     if (selectedSub2APIServerId.value) await loadSub2APIGroups(selectedSub2APIServerId.value)
     if (autoLoadItems && selectedSub2APIServerId.value) await loadSub2APIAccounts()
   })
@@ -841,6 +850,10 @@ async function pollImportJob(sourceId: string, title: string, total: number) {
 }
 
 async function startImport() {
+  if (remoteImportActive.value) {
+    toast.warning('请等待当前账号导入任务完成')
+    return
+  }
   if (activeMode.value === 'cpa') {
     await startCPAImport()
     return
@@ -865,7 +878,7 @@ async function startCPAImport() {
     const title = '导入远程 CPA'
     emit('progress', { title, total: names.length })
     try {
-      const start = await accountImportsApi.startCPAImport(poolId, names)
+      const start = await accountImportsApi.startCPAImport(poolId, names, props.targetGroupId)
       importJob.value = start.import_job || null
       emitStarted('cpa', poolId, importJob.value, title, names.length)
       if (props.externalTracking && !importJob.value?.job_id) throw new Error('后端没有返回 CPA 导入任务')
@@ -883,7 +896,7 @@ async function startCPAImport() {
 }
 
 function buildSub2APIGroupBindings(accountIds: string[]) {
-  if (!importSub2APIByGroups.value) return []
+  if (hasFixedTargetGroup.value || !importSub2APIByGroups.value) return []
   const selected = new Set(accountIds)
   const bindings: Sub2APIImportGroupBinding[] = []
   for (const group of sub2apiAccountGroups.value) {
@@ -922,7 +935,8 @@ async function startSub2APIImport() {
     try {
       const start = await accountImportsApi.startSub2APIImport(serverId, accountIds, {
         group_bindings: groupBindings,
-        create_account_groups: importSub2APIByGroups.value,
+        create_account_groups: !hasFixedTargetGroup.value && importSub2APIByGroups.value,
+        target_group_id: props.targetGroupId,
       })
       importJob.value = start.import_job || null
       emitStarted('sub2api', serverId, importJob.value, title, accountIds.length)

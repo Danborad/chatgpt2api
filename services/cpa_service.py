@@ -13,7 +13,7 @@ from services.account_import_credentials import (
 )
 from services.account_import_job import (
     RemoteAccountImportJob,
-    import_job_is_active,
+    RemoteImportJobCoordinator,
     normalize_import_error as _normalize_import_error,
     normalize_import_job as _normalize_import_job,
 )
@@ -22,6 +22,7 @@ from services.account_processing import (
     account_processing_worker_count,
 )
 from services.proxy_service import proxy_settings
+from services.remote_import_job_status import import_job_is_active
 from services.storage.remote_import_configuration_repository import (
     RemoteImportConfigurationRepository,
 )
@@ -73,6 +74,7 @@ class CPAConfig:
         if repository is not None and database_url is not None:
             raise ValueError("provide repository or database_url, not both")
         self.repository = repository or RemoteImportConfigurationRepository(database_url)
+        self._import_jobs = RemoteImportJobCoordinator(self.repository)
         self.repository.update(
             "cpa",
             lambda items: self._normalize_items(items, fail_unfinished=True),
@@ -170,30 +172,15 @@ class CPAConfig:
         return result
 
     def start_import_job(self, pool_id: str, import_job: dict) -> dict | None:
-        result: dict | None = None
-
-        def update(items: list[dict]) -> list[dict]:
-            nonlocal result
-            pools = self._normalize_items(items, fail_unfinished=False)
-            for index, pool in enumerate(pools):
-                if pool["id"] != pool_id:
-                    continue
-                current = pool.get("import_job")
-                if import_job_is_active(current):
-                    raise ValueError("an import job is already running for this CPA pool")
-                next_pool = dict(pool)
-                next_pool["import_job"] = _normalize_import_job(
-                    import_job,
-                    fail_unfinished=False,
-                    **_import_error_context(pool),
-                )
-                pools[index] = next_pool
-                result = dict(next_pool)
-                break
-            return pools
-
-        self.repository.update("cpa", update)
-        return result
+        pool = self.get_pool(pool_id)
+        if pool is None:
+            return None
+        normalized_job = _normalize_import_job(
+            import_job,
+            fail_unfinished=False,
+            **_import_error_context(pool),
+        )
+        return self._import_jobs.reserve("cpa", pool_id, normalized_job)
 
     def get_import_job(self, pool_id: str) -> dict | None:
         for pool in self._load():
@@ -312,7 +299,13 @@ class CPAImportService:
             job_id=job_id,
         )
 
-    def start_import(self, pool: dict, selected_files: list[str]) -> dict:
+    def start_import(
+        self,
+        pool: dict,
+        selected_files: list[str],
+        *,
+        target_group_id: str | None = None,
+    ) -> dict:
         names = list(dict.fromkeys(str(name or "").strip() for name in selected_files if str(name or "").strip()))
         if not names:
             raise ValueError("selected files is required")
@@ -324,7 +317,7 @@ class CPAImportService:
             raise ValueError("pool not found")
         import_job.start_worker(
             target=self._run_import_guarded,
-            args=(pool_id, pool, names, import_job.job_id),
+            args=(pool_id, pool, names, import_job.job_id, target_group_id),
             name=f"cpa-import-{pool_id}",
         )
         return saved_job
@@ -335,6 +328,7 @@ class CPAImportService:
         pool: dict,
         names: list[str],
         job_id: str,
+        target_group_id: str | None = None,
     ) -> None:
         self._job(
             pool_id,
@@ -347,9 +341,18 @@ class CPAImportService:
             pool,
             names,
             job_id=job_id,
+            target_group_id=target_group_id,
         )
 
-    def _run_import(self, pool_id: str, pool: dict, names: list[str], job_id: str = "") -> None:
+    def _run_import(
+        self,
+        pool_id: str,
+        pool: dict,
+        names: list[str],
+        job_id: str = "",
+        *,
+        target_group_id: str | None = None,
+    ) -> None:
         import_job = self._job(
             pool_id,
             pool,
@@ -376,6 +379,8 @@ class CPAImportService:
                     payload, error = None, str(exc)
 
                 if payload:
+                    if target_group_id is not None:
+                        payload["group_id"] = target_group_id
                     fetched_accounts.append((file_name, payload))
                     if not import_job.record_fetch(file_name):
                         return

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 import threading
@@ -16,6 +17,7 @@ from services.account_operation_events import (
     project_account_operation_presentation,
 )
 from services.account_service import account_service
+from services.remote_import_job_status import import_job_is_active
 from utils.diagnostics import sanitize_diagnostic_text
 
 
@@ -112,13 +114,6 @@ class ImportJobCheckpointGate:
         self._pending = 0
         self._last_checkpoint = now
         return True
-
-
-def import_job_is_active(raw: object) -> bool:
-    return isinstance(raw, dict) and _clean(raw.get("status")).lower() in {
-        "pending",
-        "running",
-    }
 
 
 def resolve_import_item_statuses(raw_result: object, total: int) -> list[str]:
@@ -260,6 +255,63 @@ class RemoteImportJobStore(Protocol):
         *,
         expected_job_id: str | None = None,
     ) -> dict | None: ...
+
+
+class RemoteImportConfigurationStore(Protocol):
+    """Atomic persistence seam used by the global import coordinator."""
+
+    def update_all(
+        self,
+        updater: Callable[[dict[str, list[dict]]], dict[str, list[dict]]],
+    ) -> dict[str, list[dict]]: ...
+
+
+class RemoteImportJobConflictError(ValueError):
+    pass
+
+
+class RemoteImportJobCoordinator:
+    """Own the process-wide rule that only one remote import may run."""
+
+    def __init__(self, store: RemoteImportConfigurationStore) -> None:
+        self._store = store
+
+    def reserve(
+        self,
+        provider: str,
+        source_id: str,
+        import_job: dict,
+    ) -> dict | None:
+        normalized_provider = _clean(provider).lower()
+        normalized_source_id = _clean(source_id)
+        job = copy.deepcopy(import_job)
+        result: dict | None = None
+
+        def update(configurations: dict[str, list[dict]]) -> dict[str, list[dict]]:
+            nonlocal result
+            if any(
+                import_job_is_active(item.get("import_job"))
+                for items in configurations.values()
+                for item in items
+                if isinstance(item, dict)
+            ):
+                raise RemoteImportJobConflictError(
+                    "an account import job is already running"
+                )
+
+            items = configurations.get(normalized_provider)
+            if items is None:
+                return configurations
+            for index, item in enumerate(items):
+                if _clean(item.get("id")) != normalized_source_id:
+                    continue
+                result = {**item, "import_job": job}
+                items[index] = result
+                break
+            return configurations
+
+        self._store.update_all(update)
+        return copy.deepcopy(result)
 
 
 ImportErrorContextProvider = Callable[..., dict[str, tuple[str, ...]]]
@@ -742,7 +794,7 @@ def normalize_import_job(
     sensitive_values = tuple(sensitive_values)
     proxy_values = tuple(proxy_values)
     status = _clean(raw.get("status")) or "failed"
-    if fail_unfinished and status in {"pending", "running"}:
+    if fail_unfinished and import_job_is_active(raw):
         status = "failed"
     stage = _clean(raw.get("stage")).lower()
     if stage not in _IMPORT_JOB_STAGES:

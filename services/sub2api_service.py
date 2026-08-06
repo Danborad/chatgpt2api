@@ -17,7 +17,7 @@ from services.account_import_credentials import (
 )
 from services.account_import_job import (
     RemoteAccountImportJob,
-    import_job_is_active,
+    RemoteImportJobCoordinator,
     normalize_import_error as _normalize_import_error,
     normalize_import_job as _normalize_import_job,
 )
@@ -26,6 +26,7 @@ from services.account_processing import (
     account_processing_worker_count,
 )
 from services.config import config
+from services.remote_import_job_status import import_job_is_active
 from services.storage.remote_import_configuration_repository import (
     RemoteImportConfigurationRepository,
 )
@@ -169,6 +170,7 @@ class Sub2APIConfig:
         if repository is not None and database_url is not None:
             raise ValueError("provide repository or database_url, not both")
         self.repository = repository or RemoteImportConfigurationRepository(database_url)
+        self._import_jobs = RemoteImportJobCoordinator(self.repository)
         self.repository.update(
             "sub2api",
             lambda items: self._normalize_items(items, fail_unfinished=True),
@@ -289,32 +291,15 @@ class Sub2APIConfig:
         return result
 
     def start_import_job(self, server_id: str, import_job: dict) -> dict | None:
-        result: dict | None = None
-
-        def update(items: list[dict]) -> list[dict]:
-            nonlocal result
-            servers = self._normalize_items(items, fail_unfinished=False)
-            for index, server in enumerate(servers):
-                if server["id"] != server_id:
-                    continue
-                current = server.get("import_job")
-                if import_job_is_active(current):
-                    raise ValueError(
-                        "an import job is already running for this Sub2API server"
-                    )
-                next_server = dict(server)
-                next_server["import_job"] = _normalize_import_job(
-                    import_job,
-                    fail_unfinished=False,
-                    **_diagnostic_context(_server_secret_source(server)),
-                )
-                servers[index] = next_server
-                result = dict(next_server)
-                break
-            return servers
-
-        self.repository.update("sub2api", update)
-        return result
+        server = self.get_server(server_id)
+        if server is None:
+            return None
+        normalized_job = _normalize_import_job(
+            import_job,
+            fail_unfinished=False,
+            **_diagnostic_context(_server_secret_source(server)),
+        )
+        return self._import_jobs.reserve("sub2api", server_id, normalized_job)
 
     def get_import_job(self, server_id: str) -> dict | None:
         for server in self._load():
@@ -922,6 +907,7 @@ class Sub2APIImportService:
         *,
         group_bindings: list[dict] | None = None,
         create_account_groups: bool = True,
+        target_group_id: str | None = None,
     ) -> dict:
         ids = list(dict.fromkeys(_clean(item) for item in account_ids if _clean(item)))
         if not ids:
@@ -933,9 +919,10 @@ class Sub2APIImportService:
         if saved_job is None:
             raise ValueError("server not found")
         try:
-            account_group_ids = _build_local_group_bindings(
-                group_bindings or [],
-                create_account_groups,
+            account_group_ids = (
+                {}
+                if target_group_id is not None
+                else _build_local_group_bindings(group_bindings or [], create_account_groups)
             )
         except Exception as exc:
             import_job.fail(
@@ -946,7 +933,7 @@ class Sub2APIImportService:
 
         import_job.start_worker(
             target=self._run_import_guarded,
-            args=(server_id, server, ids, account_group_ids, import_job.job_id),
+            args=(server_id, server, ids, account_group_ids, import_job.job_id, target_group_id),
             name=f"sub2api-import-{server_id}",
         )
         return saved_job
@@ -958,6 +945,7 @@ class Sub2APIImportService:
         account_ids: list[str],
         account_group_ids: dict[str, str],
         job_id: str,
+        target_group_id: str | None = None,
     ) -> None:
         self._job(
             server_id,
@@ -971,6 +959,7 @@ class Sub2APIImportService:
             account_ids,
             account_group_ids,
             job_id=job_id,
+            target_group_id=target_group_id,
         )
 
     def _run_import(
@@ -980,6 +969,8 @@ class Sub2APIImportService:
         account_ids: list[str],
         account_group_ids: dict[str, str],
         job_id: str = "",
+        *,
+        target_group_id: str | None = None,
     ) -> None:
         import_job = self._job(
             server_id,
@@ -1018,9 +1009,12 @@ class Sub2APIImportService:
                 credential_value = _clean(meta.get(credential_key)) if isinstance(meta, dict) else ""
                 if credential_value:
                     payload[credential_key] = credential_value
-            local_group_id = account_group_ids.get(account_id)
-            if local_group_id:
-                payload["group_id"] = local_group_id
+            if target_group_id is not None:
+                payload["group_id"] = target_group_id
+            else:
+                local_group_id = account_group_ids.get(account_id)
+                if local_group_id:
+                    payload["group_id"] = local_group_id
             fetched_accounts.append((account_id, payload))
 
         def record_result(account_id: str, error: str = "") -> bool:

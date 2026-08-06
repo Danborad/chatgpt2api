@@ -39,7 +39,7 @@
                 <p class="mt-1 truncate font-mono text-muted-foreground">{{ pool.base_url }}</p>
               </div>
               <div class="flex gap-1.5">
-                <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" @click="$emit('importCpa', pool)">导入</Button>
+                <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" :disabled="remoteImportActive" @click="$emit('importCpa', pool)">导入</Button>
                 <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" :disabled="testingExternalSource === pool.id" @click="$emit('testCpa', pool)">
                   {{ testingExternalSource === pool.id ? '测试中' : '测试' }}
                 </Button>
@@ -86,12 +86,9 @@
                 </p>
               </div>
               <div class="flex flex-wrap justify-end gap-1.5">
-                <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" @click="$emit('importSub2api', server)">导入</Button>
+                <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" :disabled="remoteImportActive" @click="$emit('importSub2api', server)">导入</Button>
                 <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" :disabled="testingExternalSource === server.id" @click="$emit('testSub2api', server)">
                   {{ testingExternalSource === server.id ? '测试中' : '测试' }}
-                </Button>
-                <Button size="xs" variant="outline" root-class="w-16 justify-center whitespace-nowrap" :disabled="sub2apiGroupsLoadingId === server.id" @click="$emit('loadSub2apiGroups', server)">
-                  {{ sub2apiGroupsLoadingId === server.id ? '读取中' : '读分组' }}
                 </Button>
                 <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap" @click="$emit('editSub2api', server)">编辑</Button>
                 <Button size="xs" variant="outline" root-class="w-14 justify-center whitespace-nowrap text-rose-600" :disabled="savingExternalSource === server.id" @click="$emit('deleteSub2api', server)">
@@ -133,7 +130,7 @@ defineProps<{
   sub2apiServers: Sub2APIServer[]
   sub2apiLoading: boolean
   sub2apiGroups: Record<string, Sub2APIRemoteGroup[]>
-  sub2apiGroupsLoadingId: string
+  remoteImportActive: boolean
   savingExternalSource: string
   testingExternalSource: string
   externalSourcesLoading: boolean
@@ -149,7 +146,6 @@ defineEmits<{
   createSub2api: []
   importSub2api: [server: Sub2APIServer, groupId?: string]
   testSub2api: [server: Sub2APIServer]
-  loadSub2apiGroups: [server: Sub2APIServer]
   editSub2api: [server: Sub2APIServer]
   deleteSub2api: [server: Sub2APIServer]
 }>()

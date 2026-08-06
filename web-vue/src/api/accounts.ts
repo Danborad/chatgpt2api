@@ -287,6 +287,7 @@ type AccountImportOptions = {
   syncAfterImport?: boolean
   restore?: boolean
   returnItems?: boolean
+  targetGroupId?: string | null
 }
 type AccountImportCleanupResponse = {
   checked?: number
@@ -688,6 +689,7 @@ export const accountsApi = {
         sync_after_import: boolean
         restore: boolean
         return_items: boolean
+        target_group_id: string | null
       },
       AccountMutationResponse
     >('/api/accounts', {
@@ -696,6 +698,7 @@ export const accountsApi = {
       sync_after_import: options.syncAfterImport ?? true,
       restore: options.restore ?? false,
       return_items: options.returnItems ?? false,
+      target_group_id: options.targetGroupId ?? null,
     })
     return {
       status: 'ok',
