@@ -63,6 +63,14 @@ export function useAccountSelectionRuntime(options: AccountSelectionRuntimeOptio
     !allVisibleSelected.value
     && options.pagedAccounts.value.some((item) => isSelected(item.id))
   ))
+  const allMatchingSelected = computed(() => {
+    if (!options.total.value || excludedIds.value.length) return false
+    if (selectionMode.value === 'all') return true
+    if (selectionMode.value !== 'filter') return false
+    return filterSnapshot.value.keyword === options.keyword.value.trim()
+      && filterSnapshot.value.status === options.status.value
+      && filterSnapshot.value.group_id === options.groupId.value
+  })
 
   function pruneToCurrentAccounts() {
     if (scopedSelectionActive.value || !selectedIds.value.length) return
@@ -194,6 +202,7 @@ export function useAccountSelectionRuntime(options: AccountSelectionRuntimeOptio
     scopedSelectionActive,
     allVisibleSelected,
     someVisibleSelected,
+    allMatchingSelected,
     pruneToCurrentAccounts,
     isSelected,
     toggleSelect,

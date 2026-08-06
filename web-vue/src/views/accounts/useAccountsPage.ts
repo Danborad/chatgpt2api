@@ -108,6 +108,7 @@ export function useAccountsPage() {
   const scopedSelectionActive = accountSelection.scopedSelectionActive
   const allVisibleSelected = accountSelection.allVisibleSelected
   const someVisibleSelected = accountSelection.someVisibleSelected
+  const allMatchingSelected = accountSelection.allMatchingSelected
   const selectionScope = accountSelection.selectionScope
   const batchInteractionBusy = ref(false)
   const batchBusy = computed(() => bulkProgress.batchBusy.value || batchInteractionBusy.value)
@@ -403,6 +404,7 @@ export function useAccountsPage() {
     selectedCount,
     allVisibleSelected,
     someVisibleSelected,
+    allMatchingSelected,
     currentPage,
     pageSize,
     pageSizeOptions: ACCOUNT_PAGE_SIZE_OPTIONS,

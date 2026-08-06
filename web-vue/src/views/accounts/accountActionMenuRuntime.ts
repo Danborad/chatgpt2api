@@ -30,6 +30,8 @@ export type AccountActionMenuItem = ActionMenuItem & {
 type AccountActionMenuRuntimeOptions = {
   selectedCount: ReadableRef<number>
   accountAllTotal: ReadableRef<number>
+  accountMatchingTotal: ReadableRef<number>
+  allMatchingSelected: ReadableRef<boolean>
   accountGroupsLoading: ReadableRef<boolean>
   bindAccountGroupOptions: ReadableRef<readonly AccountGroupBindOption[]>
   selectedBindGroupId: WritableRef<string>
@@ -39,6 +41,7 @@ type AccountActionMenuRuntimeOptions = {
   runBulkAction: (action: AccountBulkAction) => Promise<void>
   bindSelectedAccountsToGroup: () => Promise<void>
   selectAllAccounts: () => void
+  selectAllMatching: () => void
   clearSelection: () => void
 }
 
@@ -128,6 +131,11 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
         disabled: options.accountAllTotal.value === 0 || options.selectedCount.value >= options.accountAllTotal.value,
       },
       {
+        key: 'select-all-matching',
+        label: '全选筛选',
+        disabled: options.accountMatchingTotal.value === 0 || options.allMatchingSelected.value,
+      },
+      {
         key: 'clear-selection',
         label: options.selectedCount.value ? `取消选择 (${options.selectedCount.value})` : '取消选择',
         disabled: options.selectedCount.value === 0,
@@ -150,6 +158,10 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
   async function handleBatchAction(action: string) {
     if (action === 'select-all-accounts') {
       options.selectAllAccounts()
+      return
+    }
+    if (action === 'select-all-matching') {
+      options.selectAllMatching()
       return
     }
     if (action === 'clear-selection') {

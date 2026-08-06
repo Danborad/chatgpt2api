@@ -801,6 +801,7 @@ const {
   selectedCount,
   allVisibleSelected,
   someVisibleSelected,
+  allMatchingSelected,
   currentPage,
   pageSize,
   pageSizeOptions,
@@ -860,6 +861,7 @@ const {
   isSelected,
   toggleSelect,
   clearSelection,
+  selectAllMatching,
   selectAllAccounts,
   toggleSelectAllVisible,
   setImportMode,
@@ -954,6 +956,8 @@ const {
 } = useAccountActionMenuRuntime({
   selectedCount,
   accountAllTotal,
+  accountMatchingTotal: accountListTotal,
+  allMatchingSelected,
   accountGroupsLoading,
   bindAccountGroupOptions,
   selectedBindGroupId,
@@ -963,6 +967,7 @@ const {
   runBulkAction,
   bindSelectedAccountsToGroup,
   selectAllAccounts,
+  selectAllMatching,
   clearSelection,
 })
 
