@@ -94,6 +94,8 @@ DATABASE_URL=postgresql://user:password@host:5432/database
 
 ## 核心能力
 
+通用 UI 组件、主题和基础交互来自 [yukkcat/nanocat-ui](https://github.com/yukkcat/nanocat-ui)；本项目负责业务页面、后端状态投影和产品流程。
+
 |       | 领域       | 能力                                                                                                           |
 | :---: | :--------- | :------------------------------------------------------------------------------------------------------------- |
 |   🔌   | API 网关   | Chat Completions、Responses、Messages、搜索、图片生成、图片编辑、PPT / PSD 与统一可编辑文件任务                |

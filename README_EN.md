@@ -94,6 +94,8 @@ ChatGPT2API is continuously developed from [basketikun/chatgpt2api](https://gith
 
 ## Capabilities
 
+Shared UI components, themes, and interaction primitives come from [yukkcat/nanocat-ui](https://github.com/yukkcat/nanocat-ui). This repository owns the product pages, backend state projections, and domain workflows.
+
 | | Area | Capabilities |
 | :---: | :--- | :--- |
 | 🔌 | API gateway | Chat Completions, Responses, Messages, search, image generation and editing, PPT/PSD generation, and unified editable-file tasks |
