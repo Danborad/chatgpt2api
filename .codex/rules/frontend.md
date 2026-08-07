@@ -48,4 +48,4 @@
 - 保持 TypeScript 类型收敛；避免 `any`、重复状态和未消费的返回值。
 - 图标使用项目统一入口；生成文件必须通过生成脚本更新和校验，直接依赖需在 `package.json` 声明。
 - 新文案使用中文并保持简洁；命令、状态和帮助说明不能互相重复。
-- 修改 runtime 时补充 `web-vue/tests/*.mjs` 对真实 Interface 和状态转换的回归测试。
+- 修改 runtime 时可在 Git 忽略的本地 `web-vue/tests/*.mjs` 中补充真实 Interface 和状态转换回归；测试源码不纳入提交。

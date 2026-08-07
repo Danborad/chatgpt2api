@@ -45,18 +45,12 @@ test_batch_output/
 /test-run2/
 /output/
 
-# 本地实验/生成物
+# 本地实验、测试源码和生成物
 skills/
 standalone/
 test/
 tests/
-!tests/
-tests/*
-!tests/test_update_status_contract.py
 web-vue/tests/
-!web-vue/tests/
-web-vue/tests/*
-!web-vue/tests/release-ui-runtime.mjs
 scripts/test_*.py
 scripts/image_upscale/node_modules/
 web/
