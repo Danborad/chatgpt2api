@@ -37,6 +37,7 @@ from contracts.settings import (
     SettingsPatch,
     SettingsView,
 )
+from contracts.updates import UpdateStatusView, UpdateTaskView
 from api.support import require_admin, require_identity, resolve_image_base_url
 from services.account_service import account_service
 from services.auth_view import build_auth_view
@@ -77,6 +78,8 @@ from services.settings_management_service import (
     SettingsRevisionConflictError,
     settings_management_service,
 )
+from services.update_status_service import update_status_service
+from services.update_service import UpdateInstallError, update_service
 
 
 class ProxyTestRequest(BaseModel):
@@ -188,6 +191,27 @@ def create_router(app_version: str) -> APIRouter:
     @router.get("/version")
     async def get_version():
         return {"version": app_version}
+
+    @router.get("/api/system/update-status", response_model=UpdateStatusView)
+    async def get_update_status(
+        force: bool = Query(default=False),
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        return await run_in_threadpool(update_status_service.view, app_version, force=force)
+
+    @router.get("/api/system/update-task", response_model=UpdateTaskView)
+    async def get_update_task(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return update_service.view(app_version)
+
+    @router.post("/api/system/update", response_model=UpdateTaskView, status_code=202)
+    async def start_update(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return update_service.start(app_version)
+        except UpdateInstallError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
 
     @router.get("/api/settings", response_model=SettingsView)
     async def get_settings(authorization: str | None = Header(default=None)):

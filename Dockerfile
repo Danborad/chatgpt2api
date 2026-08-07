@@ -29,9 +29,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     TZ=Asia/Shanghai \
+    CHATGPT2API_BUILD_TYPE=release \
     CHATGPT2API_THREAD_TOKENS=120
 
-WORKDIR /app
+WORKDIR /opt/chatgpt2api
 
 # 安装系统依赖
 # - git: Git 存储后端需要
@@ -61,7 +62,12 @@ COPY scripts ./scripts
 COPY --from=image-upscale-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=image-upscale-build /app/scripts/image_upscale/node_modules ./scripts/image_upscale/node_modules
 COPY --from=web-build /app/web-vue/dist ./web_dist
+COPY deploy/docker-entrypoint.sh /usr/local/bin/chatgpt2api-entrypoint
+RUN chmod 0755 /usr/local/bin/chatgpt2api-entrypoint
+
+WORKDIR /app
 
 EXPOSE 80
 
+ENTRYPOINT ["chatgpt2api-entrypoint"]
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--access-log"]

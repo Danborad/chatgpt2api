@@ -6,6 +6,7 @@ services:
     ports:
       - "${CHATGPT2API_PORT:-3000}:80"
     volumes:
+      - chatgpt2api-runtime:/app
       - ./data:/app/data
       - ./config.json:/app/config.json
     environment:
@@ -14,3 +15,6 @@ services:
       CHATGPT2API_BASE_URL: ${CHATGPT2API_BASE_URL:-}
       CHATGPT2API_THREAD_TOKENS: ${CHATGPT2API_THREAD_TOKENS:-120}
       TZ: ${TZ:-Asia/Shanghai}
+
+volumes:
+  chatgpt2api-runtime:
