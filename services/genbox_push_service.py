@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from urllib.parse import urlsplit
 
 from curl_cffi import requests
 from fastapi import HTTPException
+from PIL import Image
 
 from services.bounded_task_runner import BoundedTaskRunner, env_int
 from services.config import config
@@ -72,7 +74,7 @@ def _json_object(response: Any) -> dict[str, Any]:
     return value
 
 
-def _rel_from_stored_url(url: str) -> str | None:
+def _rel_from_stored_url(url: str, *, base_url: str | None = None) -> str | None:
     raw = str(url or "").strip()
     if not raw:
         return None
@@ -82,13 +84,31 @@ def _rel_from_stored_url(url: str) -> str | None:
         return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    configured_origins: set[tuple[str, str]] = set()
+    for base in (
+        config.base_url,
+        config.get_image_storage_settings().get("public_base_url"),
+        base_url,
+    ):
+        try:
+            origin = urlsplit(str(base or "").strip().rstrip("/"))
+        except ValueError:
+            continue
+        if origin.scheme in {"http", "https"} and origin.netloc:
+            configured_origins.add((origin.scheme, origin.netloc.lower()))
+    if (parsed.scheme, parsed.netloc.lower()) not in configured_origins:
+        return None
     path = parsed.path or ""
     if "/images/" in path:
         rel = path.split("/images/", 1)[1]
     else:
         rel = ""
         public_base_url = str(config.get_image_storage_settings().get("public_base_url") or "").strip().rstrip("/")
-        for prefix in (public_base_url, str(config.base_url or "").strip().rstrip("/")):
+        for prefix in (
+            public_base_url,
+            str(config.base_url or "").strip().rstrip("/"),
+            str(base_url or "").strip().rstrip("/"),
+        ):
             if prefix and raw.startswith(f"{prefix}/"):
                 rel = raw[len(prefix) + 1 :]
                 break
@@ -118,9 +138,9 @@ def shutdown_genbox_push_service() -> None:
     _auto_push_runner.shutdown_cancel_pending_and_wait()
 
 
-def _run_auto_push(rel: str) -> None:
+def _run_auto_push(rel: str, *, metadata: Mapping[str, Any] | None = None) -> None:
     try:
-        push_gallery_image(rel)
+        push_gallery_image(rel, metadata=metadata)
         logger.info({"event": "genbox_auto_push_succeeded", "path": rel})
     except GenBoxPushError as exc:
         logger.warning({"event": "genbox_auto_push_failed", "path": rel, "code": exc.code})
@@ -136,25 +156,31 @@ def _auto_push_cancelled(rel: str, _: BaseException) -> None:
     logger.info({"event": "genbox_auto_push_cancelled", "path": rel})
 
 
-def _submit_auto_push(rel: str) -> bool:
+def _submit_auto_push(rel: str, *, metadata: Mapping[str, Any] | None = None) -> bool:
     reservation = _auto_push_runner.reserve()
     if reservation is None:
         return False
     return reservation.commit(
         _run_auto_push,
         rel,
+        metadata=metadata,
         on_cancel=lambda exc: _auto_push_cancelled(rel, exc),
     )
 
 
-def auto_push_gallery_urls(urls: list[str]) -> None:
+def auto_push_gallery_urls(
+    urls: list[str],
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    base_url: str | None = None,
+) -> None:
     try:
         if _auto_push_settings() is None:
             return
         rels: list[str] = []
         seen: set[str] = set()
         for url in urls:
-            rel = _rel_from_stored_url(url)
+            rel = _rel_from_stored_url(url, base_url=base_url)
             if not rel or rel in seen:
                 continue
             seen.add(rel)
@@ -163,7 +189,7 @@ def auto_push_gallery_urls(urls: list[str]) -> None:
                 continue
             rels.append(rel)
         for rel in rels:
-            if not _submit_auto_push(rel):
+            if not _submit_auto_push(rel, metadata=metadata):
                 logger.warning({"event": "genbox_auto_push_queue_full", "path": rel})
     except Exception as exc:
         logger.warning({
@@ -204,10 +230,15 @@ def _validate_receipt(value: Mapping[str, Any], source_id: str, sha256: str) -> 
     return str(status)
 
 
-def push_gallery_image(relative_path: str) -> dict[str, object]:
+def push_gallery_image(relative_path: str, *, metadata: Mapping[str, Any] | None = None) -> dict[str, object]:
     settings = _settings()
     rel = normalize_image_relative_path(relative_path)
     payload = image_storage_service.get_bytes(rel)
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image.verify()
+    except Exception as exc:
+        raise GenBoxPushError(404, "genbox_source_not_found", "Gallery image not registered or not a valid image") from exc
     sha256 = hashlib.sha256(payload).hexdigest()
     headers = {
         "X-GenBox-Source": str(settings["source_id"]),
@@ -226,11 +257,16 @@ def push_gallery_image(relative_path: str) -> dict[str, object]:
             if not 200 <= int(probe.status_code) < 300:
                 raise _error("genbox_unavailable")
             _validate_probe(_json_object(probe), str(settings["source_id"]), len(payload))
+            data: dict[str, str] = {"remote_path": rel, "source_sha256": sha256}
+            for key in ("prompt", "created_at", "date", "model"):
+                value = metadata.get(key) if isinstance(metadata, Mapping) else None
+                if value is not None and str(value).strip():
+                    data[key] = str(value)
             response = session.post(
                 f"{str(settings['base_url']).rstrip('/')}/api/sync/push",
                 headers=headers,
                 files={"image": (Path(rel).name, payload, "application/octet-stream")},
-                data={"remote_path": rel, "source_sha256": sha256},
+                data=data,
                 timeout=timeout,
                 allow_redirects=False,
             )
