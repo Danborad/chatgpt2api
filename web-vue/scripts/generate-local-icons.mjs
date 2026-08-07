@@ -79,7 +79,7 @@ const output = generatedSource(collection, await referencedIconNames())
 
 if (process.argv.includes('--check')) {
   const current = await readFile(outputFile, 'utf8').catch(() => '')
-  if (current !== output) {
+  if (current.replaceAll('\r\n', '\n') !== output) {
     throw new Error('Local Lucide icon set is stale. Run npm run icons:generate.')
   }
 } else {
