@@ -497,7 +497,7 @@
     <ModalShell
       :open="isUpdateDialogOpen"
       :z-index="100"
-      panel-class="flex max-h-[min(46rem,calc(100dvh-2rem))] flex-col p-6"
+      panel-class="flex min-h-0 max-h-[80dvh] flex-col overflow-hidden p-6"
       close-on-backdrop
       @close="closeUpdateDialog"
     >
@@ -698,7 +698,7 @@ import { focusFirstWithin, focusRefTarget, trapFocusWithin } from '@/lib/focusLo
 import { applyThemeMode, getStoredThemeMode, setStoredThemeMode, type ThemeMode } from '@/lib/theme'
 import {
   normalizeVersionTag,
-  parseReleaseNotes,
+  parseChangelog,
   splitReleaseInlineCode,
   type ReleaseInfo,
 } from '@/lib/release'
@@ -1285,12 +1285,7 @@ async function checkForUpdates(showMessage = true, openAvailable = false) {
     const result = await versionApi.check(showMessage)
     updateStatus.value = result
     currentVersionTag.value = result.current_tag
-    const remoteEntries = parseReleaseNotes(
-      result.latest_tag,
-      result.release_published_at,
-      result.release_notes,
-    )
-    releaseEntries.value = remoteEntries
+    releaseEntries.value = parseChangelog(result.changelog)
     if (
       openAvailable
       && result.update_available

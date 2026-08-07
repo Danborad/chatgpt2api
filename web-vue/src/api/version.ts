@@ -74,8 +74,7 @@ export function parseVersionCheckResponse(value: unknown): VersionCheckResponse 
     status_label: expectString(root.status_label, 'response.status_label'),
     status_message: expectString(root.status_message, 'response.status_message'),
     tone: expectEnum(root.tone, 'response.tone', ['success', 'muted', 'warning'] as const),
-    release_notes: expectString(root.release_notes, 'response.release_notes'),
-    release_published_at: expectString(root.release_published_at, 'response.release_published_at'),
+    changelog: expectString(root.changelog, 'response.changelog'),
     can_update: expectBoolean(root.can_update, 'response.can_update'),
   }
 }

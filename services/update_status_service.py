@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from typing import Callable, Mapping
@@ -17,6 +18,7 @@ from utils.log import logger
 
 GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/yukkcat/chatgpt2api/releases/latest"
 GITHUB_RELEASES_URL = "https://github.com/yukkcat/chatgpt2api/releases"
+GITHUB_CHANGELOG_URL = "https://api.github.com/repos/yukkcat/chatgpt2api/contents/CHANGELOG.md?ref=main"
 UPDATE_CHECK_TIMEOUT_SECS = 8
 UPDATE_CHECK_MAX_BYTES = 256 * 1024
 UPDATE_CHECK_CHUNK_BYTES = 64 * 1024
@@ -28,10 +30,34 @@ _VERSION_RE = re.compile(
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
     r"(?:\+[0-9A-Za-z.-]+)?$"
 )
+_CHANGELOG_ITEM_RE = re.compile(r"^[+*-]\s+\[[^\]\n]+\]\s+\S")
 
 
 class UpdateCheckError(RuntimeError):
     pass
+
+
+def _read_bounded_response(response, *, source: str) -> bytes:
+    try:
+        if response.status_code != 200:
+            raise UpdateCheckError(f"{source} request failed")
+
+        content_length = str(response.headers.get("content-length") or "").strip()
+        if content_length.isdigit() and int(content_length) > UPDATE_CHECK_MAX_BYTES:
+            raise UpdateCheckError(f"{source} response is too large")
+
+        chunks: list[bytes] = []
+        received_bytes = 0
+        for chunk in response.iter_content(chunk_size=UPDATE_CHECK_CHUNK_BYTES):
+            if not chunk:
+                continue
+            received_bytes += len(chunk)
+            if received_bytes > UPDATE_CHECK_MAX_BYTES:
+                raise UpdateCheckError(f"{source} response is too large")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        response.close()
 
 
 def _fetch_latest_release() -> Mapping[str, object]:
@@ -46,26 +72,7 @@ def _fetch_latest_release() -> Mapping[str, object]:
         allow_redirects=False,
         stream=True,
     )
-    try:
-        if response.status_code != 200:
-            raise UpdateCheckError("GitHub release request failed")
-
-        content_length = str(response.headers.get("content-length") or "").strip()
-        if content_length.isdigit() and int(content_length) > UPDATE_CHECK_MAX_BYTES:
-            raise UpdateCheckError("GitHub release response is too large")
-
-        chunks: list[bytes] = []
-        received_bytes = 0
-        for chunk in response.iter_content(chunk_size=UPDATE_CHECK_CHUNK_BYTES):
-            if not chunk:
-                continue
-            received_bytes += len(chunk)
-            if received_bytes > UPDATE_CHECK_MAX_BYTES:
-                raise UpdateCheckError("GitHub release response is too large")
-            chunks.append(chunk)
-        payload = b"".join(chunks)
-    finally:
-        response.close()
+    payload = _read_bounded_response(response, source="GitHub release")
 
     try:
         decoded = json.loads(payload)
@@ -74,6 +81,25 @@ def _fetch_latest_release() -> Mapping[str, object]:
     if not isinstance(decoded, dict):
         raise UpdateCheckError("GitHub release response is invalid")
     return decoded
+
+
+def _fetch_changelog() -> str:
+    response = curl_requests.get(
+        GITHUB_CHANGELOG_URL,
+        headers={
+            "Accept": "application/vnd.github.raw+json",
+            "User-Agent": "chatgpt2api-update-check/3.0",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeout=UPDATE_CHECK_TIMEOUT_SECS,
+        allow_redirects=False,
+        stream=True,
+    )
+    payload = _read_bounded_response(response, source="GitHub changelog")
+    try:
+        return payload.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise UpdateCheckError("GitHub changelog response is invalid") from exc
 
 
 def _parse_version(value: object) -> tuple[tuple[int, int, int], tuple[str, ...]] | None:
@@ -125,6 +151,37 @@ def _version_parts(value: object) -> tuple[str, str]:
     return clean or "unknown", f"v{clean}" if clean else "unknown"
 
 
+def _release_body_changelog(release: Mapping[str, object], version: str) -> str:
+    body = str(release.get("body") or "").strip()
+    if not body:
+        return ""
+
+    item_lines: list[str] = []
+    has_item = False
+    fallback_lines: list[str] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(">"):
+            continue
+        fallback_lines.append(line)
+        if _CHANGELOG_ITEM_RE.match(line):
+            item_lines.append(line)
+            has_item = True
+        elif has_item and not re.match(r"^[+*-]\s+", line):
+            item_lines.append(line)
+
+    if not has_item:
+        summary = " ".join(fallback_lines)
+        if not summary:
+            return ""
+        item_lines = [f"- [更新] {summary}"]
+
+    published_at = str(release.get("published_at") or "").strip()
+    published_date = published_at[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", published_at) else ""
+    heading = f"## {version}" + (f" - {published_date}" if published_date else "")
+    return f"{heading}\n\n" + "\n".join(item_lines)
+
+
 def _build_type() -> str:
     configured = os.getenv("CHATGPT2API_BUILD_TYPE", "").strip().lower()
     if configured in {"source", "release"}:
@@ -166,10 +223,12 @@ class UpdateStatusService:
         self,
         *,
         fetch_release: Callable[[], Mapping[str, object]] = _fetch_latest_release,
+        fetch_changelog: Callable[[], str] = _fetch_changelog,
         monotonic: Callable[[], float] = time.monotonic,
         cache_ttl_seconds: float = UPDATE_CHECK_CACHE_TTL_SECS,
     ) -> None:
         self._fetch_release = fetch_release
+        self._fetch_changelog = fetch_changelog
         self._monotonic = monotonic
         self._cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
         self._cache_lock = Lock()
@@ -203,14 +262,23 @@ class UpdateStatusService:
     def _check(self, current_version: str, runtime_mode: str) -> UpdateStatusView:
         current_version, current_tag = _version_parts(current_version)
         try:
-            release = self._fetch_release()
-            latest_version, latest_tag = _version_parts(release.get("tag_name"))
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="update-check") as executor:
+                release_future = executor.submit(self._fetch_release)
+                changelog_future = executor.submit(self._fetch_changelog)
+                release = release_future.result()
+                latest_version, latest_tag = _version_parts(release.get("tag_name"))
+                try:
+                    changelog = changelog_future.result()
+                except Exception as exc:
+                    logger.warning({
+                        "event": "version_changelog_fetch_failed",
+                        "error_type": type(exc).__name__,
+                    })
+                    changelog = _release_body_changelog(release, latest_version)
             comparison = _compare_versions(latest_version, current_version)
             if comparison is None:
                 raise UpdateCheckError("release or current version is invalid")
             release_url = f"{GITHUB_RELEASES_URL}/tag/{quote(latest_tag, safe='')}"
-            release_notes = str(release.get("body") or "").strip()
-            release_published_at = str(release.get("published_at") or "").strip()
             if comparison > 0:
                 can_update = runtime_mode == "managed_container"
                 if can_update:
@@ -230,8 +298,7 @@ class UpdateStatusService:
                     status_label="可更新" if can_update else "发现新版本",
                     status_message=status_message,
                     tone="success" if can_update else "warning",
-                    release_notes=release_notes,
-                    release_published_at=release_published_at,
+                    changelog=changelog,
                     can_update=can_update,
                 )
             return UpdateStatusView(
@@ -242,8 +309,7 @@ class UpdateStatusService:
                 status_label="已是最新",
                 status_message=f"当前版本 {current_tag} 无需更新。",
                 tone="muted",
-                release_notes=release_notes,
-                release_published_at=release_published_at,
+                changelog=changelog,
                 can_update=False,
             )
         except Exception as exc:

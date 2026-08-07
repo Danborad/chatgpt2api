@@ -9,6 +9,27 @@ export type ReleaseInlineSegment = {
   content: string
 }
 
+function parseReleaseItem(line: string): ReleaseInfo['items'][number] | null {
+  const match = line.trim().match(/^[+*-]\s+\[(.+?)]\s+(.+)$/)
+  return match ? { type: match[1], content: match[2] } : null
+}
+
+function parseReleaseItems(lines: string[]): ReleaseInfo['items'] {
+  const items: ReleaseInfo['items'] = []
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    const item = parseReleaseItem(line)
+    if (item) {
+      items.push(item)
+      continue
+    }
+    if (line && items.length && !line.startsWith('#') && !line.startsWith('>')) {
+      items[items.length - 1].content += ' ' + line
+    }
+  }
+  return items
+}
+
 export function splitReleaseInlineCode(value: string): ReleaseInlineSegment[] {
   const source = String(value || '')
   const segments: ReleaseInlineSegment[] = []
@@ -42,31 +63,10 @@ export function parseChangelog(content: string): ReleaseInfo[] {
       return {
         version: version.trim(),
         date: date.trim(),
-        items: lines
-          .map((line) => line.trim().match(/^\+\s+\[(.+?)]\s+(.+)$/))
-          .filter((match): match is RegExpMatchArray => Boolean(match))
-          .map((match) => ({ type: match[1], content: match[2] })),
+        items: parseReleaseItems(lines),
       }
     })
     .filter((release) => release.items.length)
-}
-
-export function parseReleaseNotes(version: string, publishedAt: string, content: string): ReleaseInfo[] {
-  const items: ReleaseInfo['items'] = []
-  for (const rawLine of String(content || '').split('\n')) {
-    const line = rawLine.trim()
-    const match = line.match(/^\+\s+\[(.+?)]\s+(.+)$/)
-    if (match) {
-      items.push({ type: match[1], content: match[2] })
-      continue
-    }
-    if (line && items.length && !line.startsWith('#') && !line.startsWith('>')) {
-      items[items.length - 1].content += ` ${line}`
-    }
-  }
-  if (!items.length) return []
-  const date = /^\d{4}-\d{2}-\d{2}/.exec(String(publishedAt || '').trim())?.[0] || ''
-  return [{ version: normalizeVersionTag(version), date, items }]
 }
 
 export function normalizeVersionTag(value: string): string {

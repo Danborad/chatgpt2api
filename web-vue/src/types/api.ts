@@ -233,8 +233,7 @@ export interface VersionCheckResponse {
   status_label: string
   status_message: string
   tone: 'success' | 'muted' | 'warning'
-  release_notes: string
-  release_published_at: string
+  changelog: string
   can_update: boolean
 }
 

@@ -34,8 +34,7 @@ class UpdateStatusView(_StrictModel):
     status_label: str = Field(min_length=1)
     status_message: str = Field(min_length=1)
     tone: UpdateTone
-    release_notes: str = ""
-    release_published_at: str = ""
+    changelog: str = ""
     can_update: bool = False
 
     @model_validator(mode="after")
