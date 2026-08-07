@@ -240,17 +240,36 @@ class CallRecordService:
     def hold_call_cursor(self, cursor: dict[str, Any]):
         return self.repository.hold_cursor(cursor)
 
-    def _cleanup_old(self, retention_hours: int, *, dry_run: bool) -> dict[str, int | bool]:
+    def _cleanup_old(
+        self,
+        retention_hours: int,
+        *,
+        dry_run: bool,
+        preserve_cursor: bool = False,
+    ) -> dict[str, int | bool]:
         try:
             hours = max(1, int(retention_hours))
         except (TypeError, ValueError):
             hours = 24
         cutoff_time = (beijing_now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
-        result = self.repository.cleanup_before(cutoff_time, dry_run=dry_run)
+        result = self.repository.cleanup_before(
+            cutoff_time,
+            dry_run=dry_run,
+            preserve_cursor=preserve_cursor,
+        )
         return {**result, "dry_run": dry_run}
 
     def preview_cleanup_old(self, retention_hours: int) -> dict[str, int | bool]:
         return self._cleanup_old(retention_hours, dry_run=True)
 
-    def cleanup_old(self, retention_hours: int) -> dict[str, int | bool]:
-        return self._cleanup_old(retention_hours, dry_run=False)
+    def cleanup_old(
+        self,
+        retention_hours: int,
+        *,
+        preserve_cursor: bool = False,
+    ) -> dict[str, int | bool]:
+        return self._cleanup_old(
+            retention_hours,
+            dry_run=False,
+            preserve_cursor=preserve_cursor,
+        )

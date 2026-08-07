@@ -54,6 +54,14 @@ def create_app() -> FastAPI:
         start_genbox_push_service()
         image_task_service.start()
         try:
+            projection_reset = await run_in_threadpool(
+                dashboard_metrics_service.reset_projection_schema_if_needed
+            )
+            if projection_reset:
+                logger.info({"event": "dashboard_metrics_projection_schema_reset"})
+        except Exception as exc:
+            logger.error({"event": "dashboard_metrics_projection_schema_reset_failed", "error": str(exc)})
+        try:
             cleanup_result = await run_in_threadpool(
                 retention_cleanup_coordinator.run_startup_automatic,
                 enforce_image_free_space=False,
@@ -72,20 +80,21 @@ def create_app() -> FastAPI:
             )
         except Exception as exc:
             logger.error({"event": "dashboard_metrics_startup_sync_failed", "error": str(exc)})
-            try:
-                await run_in_threadpool(dashboard_metrics_service.mark_ingest_failed)
-            except Exception as marker_exc:
-                logger.error({"event": "dashboard_metrics_startup_marker_failed", "error": str(marker_exc)})
         account_service.cleanup_auto_remove_accounts()
         stop_event = Event()
         thread = start_account_lifecycle_watcher(stop_event)
         cleanup_thread = start_retention_cleanup_scheduler(stop_event)
+        dashboard_metrics_thread = dashboard_metrics_service.start_refresh_scheduler(
+            log_service,
+            stop_event,
+        )
         backup_service.start()
         try:
             yield
         finally:
             stop_event.set()
             thread.join(timeout=1)
+            dashboard_metrics_thread.join(timeout=1)
             await run_in_threadpool(cleanup_thread.join, RETENTION_SHUTDOWN_TIMEOUT_SECS)
             await run_in_threadpool(image_task_service.shutdown_cancel_pending_and_wait)
             await run_in_threadpool(shutdown_genbox_push_service)

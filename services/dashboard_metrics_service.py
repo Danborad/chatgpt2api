@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import re
 import threading
-import time
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -16,27 +15,8 @@ from utils.timezone import beijing_now, parse_to_beijing_naive
 
 
 DASHBOARD_METRICS_RETENTION_DAYS = 60
-DASHBOARD_METRICS_SCHEMA_VERSION = 4
 DASHBOARD_TIME_RANGES = ("24h", "7d", "30d")
-DASHBOARD_DURATION_BUCKETS_MS = (
-    250,
-    500,
-    1_000,
-    2_000,
-    3_000,
-    5_000,
-    10_000,
-    20_000,
-    30_000,
-    60_000,
-    120_000,
-    180_000,
-    300_000,
-    600_000,
-    900_000,
-    1_800_000,
-    3_600_000,
-)
+DASHBOARD_METRICS_REFRESH_INTERVAL_SECS = 10.0
 
 _NON_MODEL_KEYS = {
     "",
@@ -114,58 +94,30 @@ def _increment(counter: dict[str, int], key: object, default: str = "unknown") -
 
 def _dashboard_outcome(item: dict[str, Any]) -> str:
     outcome = call_outcome(item)
-    if outcome == "partial_success":
+    if outcome in {"success", "partial_success"}:
         return "success"
-    return "failed" if outcome == "unknown" else outcome
+    if outcome == "text_review":
+        return "excluded"
+    return "final_failed"
 
 
 def _image_switch_count(item: dict[str, Any]) -> int:
     return call_switch_count(item)
 
 
-def _duration_histogram_index(duration_ms: float) -> int:
-    for index, upper_bound in enumerate(DASHBOARD_DURATION_BUCKETS_MS):
-        if duration_ms <= upper_bound:
-            return index
-    return len(DASHBOARD_DURATION_BUCKETS_MS)
-
-
-def _histogram_percentile(histogram: list[int], percentile: float) -> float | None:
-    total = sum(max(0, int(value or 0)) for value in histogram)
-    if total <= 0:
-        return None
-    target = max(1, int(total * percentile + 0.999999))
-    cumulative = 0
-    for index, value in enumerate(histogram):
-        cumulative += max(0, int(value or 0))
-        if cumulative < target:
-            continue
-        if index < len(DASHBOARD_DURATION_BUCKETS_MS):
-            return float(DASHBOARD_DURATION_BUCKETS_MS[index])
-        return None
-    return None
-
 def _empty_bucket() -> dict[str, Any]:
     return {
         "total": 0,
         "success": 0,
-        "failed": 0,
-        "text_review": 0,
-        "rate_limited": 0,
+        "final_failed": 0,
         "switch_requests": 0,
         "switch_count": 0,
         "switch_recovered": 0,
         "success_duration_total_ms": 0.0,
         "success_duration_count": 0,
-        "success_duration_histogram": [],
-        "by_model": {},
         "model_success": {},
-        "model_failed": {},
-        "model_rate_limited": {},
-        "model_text_review": {},
         "model_success_total_times": {},
         "model_success_time_counts": {},
-        "model_success_duration_histograms": {},
     }
 
 
@@ -173,9 +125,7 @@ def _merge_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
     for key in (
         "total",
         "success",
-        "failed",
-        "text_review",
-        "rate_limited",
+        "final_failed",
         "switch_requests",
         "switch_count",
         "switch_recovered",
@@ -189,15 +139,7 @@ def _merge_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
         int(target.get("success_duration_count", 0) or 0)
         + int(source.get("success_duration_count", 0) or 0)
     )
-    for key in (
-        "by_model",
-        "model_success",
-        "model_failed",
-        "model_rate_limited",
-        "model_text_review",
-        "model_success_total_times",
-        "model_success_time_counts",
-    ):
+    for key in ("model_success", "model_success_total_times", "model_success_time_counts"):
         target_map = target.setdefault(key, {})
         source_map = source.get(key) if isinstance(source.get(key), dict) else {}
         for name, value in source_map.items():
@@ -207,33 +149,7 @@ def _merge_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
                 numeric = 0.0 if key == "model_success_total_times" else 0
             target_map[str(name)] = target_map.get(str(name), 0) + numeric
 
-    target_histograms = target.setdefault("model_success_duration_histograms", {})
-    source_histograms = (
-        source.get("model_success_duration_histograms")
-        if isinstance(source.get("model_success_duration_histograms"), dict)
-        else {}
-    )
-    histogram_size = len(DASHBOARD_DURATION_BUCKETS_MS) + 1
-    for model, raw_histogram in source_histograms.items():
-        if not isinstance(raw_histogram, list):
-            continue
-        target_histogram = target_histograms.setdefault(str(model), [0] * histogram_size)
-        if not isinstance(target_histogram, list) or len(target_histogram) != histogram_size:
-            target_histogram = [0] * histogram_size
-            target_histograms[str(model)] = target_histogram
-        for index in range(histogram_size):
-            value = raw_histogram[index] if index < len(raw_histogram) else 0
-            target_histogram[index] += int(value or 0)
-
-    source_histogram = source.get("success_duration_histogram")
-    if isinstance(source_histogram, list):
-        target_histogram = target.get("success_duration_histogram")
-        if not isinstance(target_histogram, list) or len(target_histogram) != histogram_size:
-            target_histogram = [0] * histogram_size
-            target["success_duration_histogram"] = target_histogram
-        for index in range(histogram_size):
-            value = source_histogram[index] if index < len(source_histogram) else 0
-            target_histogram[index] += int(value or 0)
+    return
 
 
 def _percentage(numerator: int, denominator: int) -> float | None:
@@ -242,15 +158,12 @@ def _percentage(numerator: int, denominator: int) -> float | None:
 
 def _bucket_metrics(bucket: dict[str, Any]) -> dict[str, Any]:
     success = int(bucket.get("success", 0) or 0)
-    failed = int(bucket.get("failed", 0) or 0)
-    rate_limited = int(bucket.get("rate_limited", 0) or 0)
-    final_failed = failed + rate_limited
+    final_failed = int(bucket.get("final_failed", 0) or 0)
     measured = success + final_failed
     duration_total = float(bucket.get("success_duration_total_ms", 0.0) or 0.0)
     duration_count = int(bucket.get("success_duration_count", 0) or 0)
     switch_requests = int(bucket.get("switch_requests", 0) or 0)
     switch_recovered = int(bucket.get("switch_recovered", 0) or 0)
-    histogram = bucket.get("success_duration_histogram")
     return {
         "total_calls": int(bucket.get("total", 0) or 0),
         "success_calls": success,
@@ -261,10 +174,6 @@ def _bucket_metrics(bucket: dict[str, Any]) -> dict[str, Any]:
             if duration_count > 0
             else None
         ),
-        "p95_success_duration_ms": _histogram_percentile(
-            histogram if isinstance(histogram, list) else [],
-            0.95,
-        ),
         "switch_requests": switch_requests,
         "switch_count": int(bucket.get("switch_count", 0) or 0),
         "switch_recovered": switch_recovered,
@@ -273,7 +182,6 @@ def _bucket_metrics(bucket: dict[str, Any]) -> dict[str, Any]:
 
 def _empty_metrics_data() -> dict[str, Any]:
     return {
-        "version": DASHBOARD_METRICS_SCHEMA_VERSION,
         "days": {},
         "ingest": {
             "initialized": False,
@@ -329,7 +237,6 @@ class DashboardMetricsService:
         self._lock = threading.RLock()
         self._ingest_failed = False
         self._stale_reason: str | None = None
-        self._dashboard_sync_not_before = 0.0
 
     @staticmethod
     def _normalize_persisted(value: object) -> dict[str, Any]:
@@ -338,31 +245,19 @@ class DashboardMetricsService:
             data["days"] = {}
         if not isinstance(data.get("ingest"), dict):
             data["ingest"] = {}
-        try:
-            data["version"] = int(data.get("version") or 0)
-        except (TypeError, ValueError):
-            data["version"] = 0
         return data
 
     def _load_persisted(self) -> dict[str, Any]:
         return self._normalize_persisted(self.repository.load().data)
 
     @staticmethod
-    def _prepare_save(
-        data: dict[str, Any],
-        *,
-        normalize_schema: bool = True,
-    ) -> dict[str, Any]:
-        if normalize_schema:
-            data["version"] = DASHBOARD_METRICS_SCHEMA_VERSION
+    def _prepare_save(data: dict[str, Any]) -> dict[str, Any]:
         data["retention_days"] = DASHBOARD_METRICS_RETENTION_DAYS
         data["updated_at"] = beijing_now().isoformat(timespec="seconds")
         return data
 
-    def _save(self, data: dict[str, Any], *, normalize_schema: bool = True) -> None:
-        self.repository.replace(
-            self._prepare_save(data, normalize_schema=normalize_schema)
-        )
+    def _save(self, data: dict[str, Any]) -> None:
+        self.repository.replace(self._prepare_save(data))
 
     @staticmethod
     def _ingest_state(data: dict[str, Any]) -> dict[str, Any]:
@@ -409,23 +304,15 @@ class DashboardMetricsService:
                 changed = True
         return changed
 
-    def begin_startup(self) -> bool:
-        """Report whether startup must rebuild instead of applying a cursor tail."""
+    def reset_projection_schema_if_needed(self) -> bool:
+        """Reset stale physical projection tables without touching Call Records."""
         with self._lock:
-            data = self._load_persisted()
-            ingest = self._ingest_state(data)
-            cursor_valid = self._normalize_log_cursor(ingest.get("log_cursor")) is not None
-            needs_rebuild = not (
-                data.get("version") == DASHBOARD_METRICS_SCHEMA_VERSION
-                and ingest.get("initialized") is True
-                and ingest.get("status") == "ready"
-                and ingest.get("stale") is not True
-                and not _clean_text(ingest.get("failure_reason"))
-                and cursor_valid
-            )
-            self._ingest_failed = needs_rebuild
-            self._stale_reason = "startup_rebuild_pending" if needs_rebuild else None
-            return needs_rebuild
+            reset = self.repository.reset_schema_if_needed()
+            if reset:
+                self._ingest_failed = True
+                self._stale_reason = "projection_schema_reset"
+            return reset
+
     @staticmethod
     def _normalize_log_cursor(value: object) -> dict[str, Any] | None:
         if not isinstance(value, dict):
@@ -445,6 +332,7 @@ class DashboardMetricsService:
     def _reset_runtime_ingest_locked(self) -> None:
         self._ingest_failed = False
         self._stale_reason = None
+
     def _build_log_window_locked(
         self,
         items: Iterable[dict[str, Any]],
@@ -568,8 +456,7 @@ class DashboardMetricsService:
                             ingest = self._ingest_state(data)
                             cursor = self._normalize_log_cursor(ingest.get("log_cursor"))
                             checkpoint_ready = (
-                                data.get("version") == DASHBOARD_METRICS_SCHEMA_VERSION
-                                and ingest.get("initialized") is True
+                                ingest.get("initialized") is True
                                 and ingest.get("status") == "ready"
                                 and ingest.get("stale") is not True
                                 and not _clean_text(ingest.get("failure_reason"))
@@ -628,25 +515,6 @@ class DashboardMetricsService:
             })
             return rebuilt
 
-    def sync_for_dashboard(
-        self,
-        log_source: Any,
-        *,
-        min_interval_seconds: float = 1.0,
-    ) -> bool:
-        """Refresh metrics while coalescing concurrent dashboard requests."""
-        with self._lock:
-            now = time.monotonic()
-            if now < self._dashboard_sync_not_before:
-                return False
-            try:
-                return self.sync_from_log_service(log_source)
-            finally:
-                self._dashboard_sync_not_before = time.monotonic() + max(
-                    0.0,
-                    float(min_interval_seconds),
-                )
-
     def sync_from_logs(self, items: Iterable[dict[str, Any]]) -> bool:
         """Full rebuild helper for migrations and deterministic tests."""
         with self._lock:
@@ -655,7 +523,6 @@ class DashboardMetricsService:
             self._reset_runtime_ingest_locked()
             logger.info({
                 "event": "dashboard_metrics_synced",
-                "schema_version": DASHBOARD_METRICS_SCHEMA_VERSION,
                 "records": record_count,
             })
             return True
@@ -674,10 +541,7 @@ class DashboardMetricsService:
                         reason=self._stale_reason,
                     )
                     ingest["ingest_failed_at"] = beijing_now().isoformat(timespec="seconds")
-                    return self._prepare_save(
-                        data,
-                        normalize_schema=data.get("version") == DASHBOARD_METRICS_SCHEMA_VERSION,
-                    )
+                    return self._prepare_save(data)
 
                 self.repository.update(mark_failed)
             except Exception as exc:
@@ -695,7 +559,8 @@ class DashboardMetricsService:
                 duration_ms = None
 
         bucket["total"] = int(bucket.get("total", 0) or 0) + 1
-        bucket[outcome] = int(bucket.get(outcome, 0) or 0) + 1
+        if outcome != "excluded":
+            bucket[outcome] = int(bucket.get(outcome, 0) or 0) + 1
 
         switch_count = _image_switch_count(item)
         if switch_count > 0:
@@ -712,32 +577,47 @@ class DashboardMetricsService:
             bucket["success_duration_count"] = (
                 int(bucket.get("success_duration_count", 0) or 0) + 1
             )
-            histogram = bucket.setdefault(
-                "success_duration_histogram",
-                [0] * (len(DASHBOARD_DURATION_BUCKETS_MS) + 1),
-            )
-            if not isinstance(histogram, list) or len(histogram) != len(DASHBOARD_DURATION_BUCKETS_MS) + 1:
-                histogram = [0] * (len(DASHBOARD_DURATION_BUCKETS_MS) + 1)
-                bucket["success_duration_histogram"] = histogram
-            histogram[_duration_histogram_index(duration_ms)] += 1
 
-        if _looks_like_model_label(model):
-            _increment(bucket.setdefault("by_model", {}), model)
-            _increment(bucket.setdefault(f"model_{outcome}", {}), model)
+        if outcome == "success" and _looks_like_model_label(model):
+            _increment(bucket.setdefault("model_success", {}), model)
             if duration_ms is not None:
                 totals = bucket.setdefault("model_success_total_times", {})
                 counts = bucket.setdefault("model_success_time_counts", {})
-                histograms = bucket.setdefault("model_success_duration_histograms", {})
                 totals[model] = float(totals.get(model, 0.0) or 0.0) + duration_ms
                 counts[model] = int(counts.get(model, 0) or 0) + 1
-                histogram = histograms.setdefault(
-                    model,
-                    [0] * (len(DASHBOARD_DURATION_BUCKETS_MS) + 1),
-                )
-                if not isinstance(histogram, list) or len(histogram) != len(DASHBOARD_DURATION_BUCKETS_MS) + 1:
-                    histogram = [0] * (len(DASHBOARD_DURATION_BUCKETS_MS) + 1)
-                    histograms[model] = histogram
-                histogram[_duration_histogram_index(duration_ms)] += 1
+
+    def refresh_worker(
+        self,
+        log_source: Any,
+        stop_event: threading.Event,
+        *,
+        interval_seconds: float = DASHBOARD_METRICS_REFRESH_INTERVAL_SECS,
+    ) -> None:
+        """Incrementally refresh the projection until application shutdown."""
+        interval = max(0.1, float(interval_seconds))
+        while not stop_event.wait(interval):
+            try:
+                self.sync_from_log_service(log_source)
+            except Exception as exc:
+                logger.error({
+                    "event": "dashboard_metrics_refresh_failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    def start_refresh_scheduler(
+        self,
+        log_source: Any,
+        stop_event: threading.Event,
+    ) -> threading.Thread:
+        thread = threading.Thread(
+            target=self.refresh_worker,
+            args=(log_source, stop_event),
+            daemon=True,
+            name="dashboard-metrics-refresh",
+        )
+        thread.start()
+        return thread
 
     @classmethod
     def _apply_call_to_data(cls, data: dict[str, Any], item: dict[str, Any], dt: datetime) -> None:
@@ -749,21 +629,6 @@ class DashboardMetricsService:
         hour = hours.setdefault(hour_key, _empty_bucket())
         cls._apply_call(day, item)
         cls._apply_call(hour, item)
-
-    def rebuild_if_needed(self, items: Iterable[dict[str, Any]]) -> bool:
-        """Rebuild derived metrics once when the persisted schema changes."""
-        with self._lock:
-            persisted = self._load_persisted()
-            if persisted.get("version") == DASHBOARD_METRICS_SCHEMA_VERSION:
-                if self._prune(persisted):
-                    self._save(persisted)
-                return False
-        self.sync_from_logs(items)
-        logger.info({
-            "event": "dashboard_metrics_rebuilt",
-            "schema_version": DASHBOARD_METRICS_SCHEMA_VERSION,
-        })
-        return True
 
     def _snapshot_data(self) -> dict[str, Any]:
         with self._lock:
@@ -777,18 +642,13 @@ class DashboardMetricsService:
                     reason=self._stale_reason or "ingest_failed",
                 )
             return copy.deepcopy(data)
-    def _snapshot_days(self) -> dict[str, Any]:
-        data = self._snapshot_data()
-        days = data.get("days") if isinstance(data.get("days"), dict) else {}
-        return days
+
 
     @staticmethod
     def _metrics_view(data: dict[str, Any], *, now: datetime) -> dict[str, Any]:
         ingest = data.get("ingest") if isinstance(data.get("ingest"), dict) else {}
-        schema_ready = data.get("version") == DASHBOARD_METRICS_SCHEMA_VERSION
         ready = (
-            schema_ready
-            and ingest.get("initialized") is True
+            ingest.get("initialized") is True
             and ingest.get("status") == "ready"
             and ingest.get("stale") is not True
         )
@@ -803,7 +663,7 @@ class DashboardMetricsService:
             "status": "ready" if ready else "degraded",
             "ready": ready,
             "stale": not ready,
-        "source": "call_record_sequence",
+            "source": "call_record_sequence",
             "source_revision": _clean_text(ingest.get("last_event_id")) or None,
             "last_ingested_at": last_ingested_at,
             "freshness_ms": freshness_ms,
@@ -866,15 +726,8 @@ class DashboardMetricsService:
         def integer_series(key: str) -> list[int]:
             return [int(bucket.get(key, 0) or 0) for bucket in series_buckets]
 
-        total_requests = integer_series("total")
         success_requests = integer_series("success")
-        failed_requests = integer_series("failed")
-        rate_limited_requests = integer_series("rate_limited")
-        final_failed_requests = [
-            failed_requests[index] + rate_limited_requests[index]
-            for index in range(bucket_count)
-        ]
-        text_review_requests = integer_series("text_review")
+        final_failed_requests = integer_series("final_failed")
         measured_requests = [
             success_requests[index] + final_failed_requests[index]
             for index in range(bucket_count)
@@ -884,25 +737,13 @@ class DashboardMetricsService:
             for index, measured in enumerate(measured_requests)
         ]
 
-        model_keys = (
-            "by_model",
-            "model_success",
-            "model_failed",
-            "model_rate_limited",
-            "model_text_review",
-        )
-        model_series: dict[str, dict[str, list[int]]] = {}
+        model_success_requests: dict[str, list[int]] = {}
         model_duration_totals: dict[str, list[float]] = {}
         model_duration_counts: dict[str, list[int]] = {}
         for index, bucket in enumerate(series_buckets):
-            for key in model_keys:
-                values = bucket.get(key) if isinstance(bucket.get(key), dict) else {}
-                for model, count in values.items():
-                    series = model_series.setdefault(
-                        str(model),
-                        {name: [0] * bucket_count for name in model_keys},
-                    )
-                    series[key][index] += int(count or 0)
+            values = bucket.get("model_success") if isinstance(bucket.get("model_success"), dict) else {}
+            for model, count in values.items():
+                model_success_requests.setdefault(str(model), [0] * bucket_count)[index] += int(count or 0)
             totals = (
                 bucket.get("model_success_total_times")
                 if isinstance(bucket.get("model_success_total_times"), dict)
@@ -919,23 +760,11 @@ class DashboardMetricsService:
                 model_duration_counts.setdefault(str(model), [0] * bucket_count)[index] += int(count or 0)
 
         model_names = sorted(
-            set(model_series) | set(model_duration_totals) | set(model_duration_counts),
-            key=lambda model: (-sum(model_series.get(model, {}).get("by_model", [])), model.lower()),
+            set(model_success_requests) | set(model_duration_totals) | set(model_duration_counts),
+            key=lambda model: (-sum(model_success_requests.get(model, [])), model.lower()),
         )
-        models: list[dict[str, Any]] = []
-        model_requests: dict[str, list[int]] = {}
-        model_success_requests: dict[str, list[int]] = {}
-        model_failed_requests: dict[str, list[int]] = {}
-        model_rate_limited_requests: dict[str, list[int]] = {}
-        model_text_review_requests: dict[str, list[int]] = {}
         model_avg_success_duration_ms: dict[str, list[float | None]] = {}
-        all_histograms = (
-            total_bucket.get("model_success_duration_histograms")
-            if isinstance(total_bucket.get("model_success_duration_histograms"), dict)
-            else {}
-        )
         for model in model_names:
-            series = model_series.get(model, {name: [0] * bucket_count for name in model_keys})
             duration_totals = model_duration_totals.get(model, [0.0] * bucket_count)
             duration_counts = model_duration_counts.get(model, [0] * bucket_count)
             avg_duration_series = [
@@ -944,67 +773,17 @@ class DashboardMetricsService:
                 else None
                 for index in range(bucket_count)
             ]
-            model_requests[model] = series["by_model"]
-            model_success_requests[model] = series["model_success"]
-            model_failed_requests[model] = series["model_failed"]
-            model_rate_limited_requests[model] = series["model_rate_limited"]
-            model_text_review_requests[model] = series["model_text_review"]
             model_avg_success_duration_ms[model] = avg_duration_series
-            total_duration = sum(duration_totals)
-            duration_count = sum(duration_counts)
-            success_calls = sum(series["model_success"])
-            failed_calls = sum(series["model_failed"])
-            rate_limited_calls = sum(series["model_rate_limited"])
-            final_failed_series = [
-                series["model_failed"][index] + series["model_rate_limited"][index]
-                for index in range(bucket_count)
-            ]
-            final_failed_calls = failed_calls + rate_limited_calls
-            measured_calls = success_calls + final_failed_calls
-            raw_histogram = all_histograms.get(model)
-            histogram = raw_histogram if isinstance(raw_histogram, list) else []
-            models.append({
-                "name": model,
-                "total_calls": sum(series["by_model"]),
-                "success_calls": success_calls,
-                "failed_calls": failed_calls,
-                "rate_limited_calls": rate_limited_calls,
-                "final_failed_calls": final_failed_calls,
-                "text_review_calls": sum(series["model_text_review"]),
-                "measured_calls": measured_calls,
-                "success_rate": (
-                    round(success_calls * 100 / measured_calls, 2)
-                    if measured_calls > 0
-                    else None
-                ),
-                "avg_success_duration_ms": round(total_duration / duration_count, 2) if duration_count > 0 else None,
-                "p95_success_duration_ms": _histogram_percentile(histogram, 0.95),
-                "call_series": series["by_model"],
-                "success_series": series["model_success"],
-                "failed_series": series["model_failed"],
-                "rate_limited_series": series["model_rate_limited"],
-                "final_failed_series": final_failed_series,
-                "text_review_series": series["model_text_review"],
-                "avg_success_duration_series_ms": avg_duration_series,
-            })
 
         current_metrics = _bucket_metrics(total_bucket)
         success_total = current_metrics["success_calls"]
-        failed_total = int(total_bucket.get("failed", 0) or 0)
-        rate_limited_total = int(total_bucket.get("rate_limited", 0) or 0)
         final_failed_total = current_metrics["final_failed_calls"]
-        measured_total = success_total + final_failed_total
         totals = {
             "total": current_metrics["total_calls"],
             "success": success_total,
-            "failed": failed_total,
-            "rate_limited": rate_limited_total,
             "final_failed": final_failed_total,
-            "text_review": int(total_bucket.get("text_review", 0) or 0),
-            "measured": measured_total,
             "success_rate": current_metrics["success_rate"],
             "avg_success_duration_ms": current_metrics["avg_success_duration_ms"],
-            "p95_success_duration_ms": current_metrics["p95_success_duration_ms"],
         }
         switching = {
             "requests": current_metrics["switch_requests"],
@@ -1012,43 +791,37 @@ class DashboardMetricsService:
             "recovered": current_metrics["switch_recovered"],
             "recovery_rate": current_metrics["switch_recovery_rate"],
         }
-        buckets = [
-            {
+        buckets = []
+        for start, current_bucket in zip(starts, series_buckets):
+            metrics = _bucket_metrics(current_bucket)
+            buckets.append({
                 "label": start.strftime(bucket_format),
                 "start_at": start.isoformat(timespec="seconds"),
                 "end_at": (start + bucket_delta).isoformat(timespec="seconds"),
-                **_bucket_metrics(current_bucket),
-            }
-            for start, current_bucket in zip(starts, series_buckets)
-        ]
+                "total_calls": metrics["total_calls"],
+                "success_calls": metrics["success_calls"],
+                "final_failed_calls": metrics["final_failed_calls"],
+                "success_rate": metrics["success_rate"],
+                "avg_success_duration_ms": metrics["avg_success_duration_ms"],
+                "switch_count": metrics["switch_count"],
+                "switch_recovered": metrics["switch_recovered"],
+                "switch_recovery_rate": metrics["switch_recovery_rate"],
+            })
         trend = {
             "labels": labels,
-            "total_requests": total_requests,
             "success_requests": success_requests,
-            "failed_requests": failed_requests,
-            "rate_limited_requests": rate_limited_requests,
             "final_failed_requests": final_failed_requests,
-            "text_review_requests": text_review_requests,
-            "measured_requests": measured_requests,
             "success_rate": success_rate,
-            "switch_requests": integer_series("switch_requests"),
             "switch_count": integer_series("switch_count"),
-            "switch_recovered": integer_series("switch_recovered"),
-            "model_requests": model_requests,
             "model_success_requests": model_success_requests,
-            "model_failed_requests": model_failed_requests,
-            "model_rate_limited_requests": model_rate_limited_requests,
-            "model_text_review_requests": model_text_review_requests,
             "model_avg_success_duration_ms": model_avg_success_duration_ms,
         }
         return {
             "time_range": time_range,
-            "bucket_unit": "hour" if time_range == "24h" else "day",
             "window": window,
             "totals": totals,
             "switching": switching,
             "buckets": buckets,
-            "models": models,
             "trend": trend,
         }
 

@@ -268,8 +268,6 @@ export type DashboardTimeRangeKey = '24h' | '7d' | '30d'
 export interface DashboardMeta {
   schema_version: number
   generated_at: string
-  metrics_schema_version: number
-  selected_range: DashboardTimeRangeKey
   available_ranges: DashboardTimeRangeKey[]
 }
 
@@ -284,6 +282,10 @@ export interface DashboardMetrics {
   checkpoint_at: string | null
   failure_reason: string | null
   retention_days: number
+}
+
+export interface DashboardRuntime {
+  current_concurrency: number
 }
 
 export interface DashboardAccountStats {
@@ -305,14 +307,9 @@ export interface DashboardAccountStats {
 export interface DashboardTotals {
   total: number
   success: number
-  failed: number
-  rate_limited: number
   final_failed: number
-  text_review: number
-  measured: number
   success_rate: number | null
   avg_success_duration_ms: number | null
-  p95_success_duration_ms: number | null
 }
 
 export interface DashboardBucket {
@@ -324,8 +321,6 @@ export interface DashboardBucket {
   final_failed_calls: number
   success_rate: number | null
   avg_success_duration_ms: number | null
-  p95_success_duration_ms: number | null
-  switch_requests: number
   switch_count: number
   switch_recovered: number
   switch_recovery_rate: number | null
@@ -338,45 +333,13 @@ export interface DashboardSwitching {
   recovery_rate: number | null
 }
 
-export interface DashboardModelStats {
-  name: string
-  total_calls: number
-  success_calls: number
-  failed_calls: number
-  rate_limited_calls: number
-  final_failed_calls: number
-  text_review_calls: number
-  measured_calls: number
-  success_rate: number | null
-  avg_success_duration_ms: number | null
-  p95_success_duration_ms: number | null
-  call_series: number[]
-  success_series: number[]
-  failed_series: number[]
-  rate_limited_series: number[]
-  final_failed_series: number[]
-  text_review_series: number[]
-  avg_success_duration_series_ms: Array<number | null>
-}
-
 export interface DashboardTrend {
   labels: string[]
-  total_requests: number[]
   success_requests: number[]
-  failed_requests: number[]
-  rate_limited_requests: number[]
   final_failed_requests: number[]
-  text_review_requests: number[]
-  measured_requests: number[]
   success_rate: Array<number | null>
-  switch_requests: number[]
   switch_count: number[]
-  switch_recovered: number[]
-  model_requests: Record<string, number[]>
   model_success_requests: Record<string, number[]>
-  model_failed_requests: Record<string, number[]>
-  model_rate_limited_requests: Record<string, number[]>
-  model_text_review_requests: Record<string, number[]>
   model_avg_success_duration_ms: Record<string, Array<number | null>>
 }
 
@@ -390,12 +353,10 @@ export interface DashboardWindow {
 
 export interface DashboardRangeStats {
   time_range: DashboardTimeRangeKey
-  bucket_unit: 'hour' | 'day'
   window: DashboardWindow
   totals: DashboardTotals
   switching: DashboardSwitching
   buckets: DashboardBucket[]
-  models: DashboardModelStats[]
   trend: DashboardTrend
 }
 
@@ -405,6 +366,7 @@ export interface DashboardResponse {
   version: string
   meta: DashboardMeta
   metrics: DashboardMetrics
+  runtime: DashboardRuntime
   accounts: DashboardAccountStats
   storage: {
     application_database: Record<string, unknown>

@@ -46,6 +46,7 @@ class CallRecordModel(DatabaseBase):
         Index("ix_call_records_model_sequence", "model", "sequence"),
         Index("ix_call_records_account_sequence", "account_email", "sequence"),
         Index("ix_call_records_conversation_sequence", "conversation_id", "sequence"),
+        {"sqlite_autoincrement": True},
     )
 
 
@@ -322,7 +323,13 @@ class CallRecordRepository:
         finally:
             session.close()
 
-    def cleanup_before(self, cutoff_time: str, *, dry_run: bool) -> dict[str, int]:
+    def cleanup_before(
+        self,
+        cutoff_time: str,
+        *,
+        dry_run: bool,
+        preserve_cursor: bool = False,
+    ) -> dict[str, int]:
         session = self.Session()
         try:
             filters = (CallRecordModel.event_time < cutoff_time,)
@@ -337,7 +344,8 @@ class CallRecordRepository:
             ) or 0)
             if removed and not dry_run:
                 session.execute(delete(CallRecordModel).where(*filters))
-                self._rotate_generation(session)
+                if not preserve_cursor:
+                    self._rotate_generation(session)
             session.commit()
             return {
                 "removed": removed,

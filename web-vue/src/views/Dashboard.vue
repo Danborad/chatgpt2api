@@ -110,6 +110,7 @@ defineOptions({ name: 'Dashboard' })
 const {
   stats,
   dashboardRanges,
+  dashboardRuntime,
   dashboardDataReady,
   dashboardLoadError,
   dashboardDataWarning,
@@ -149,6 +150,12 @@ const callStats = computed(() => {
   const totals = range?.totals
   return [
     {
+      label: '当前并发',
+      value: dashboardRuntime.value ? formatCount(dashboardRuntime.value.current_concurrency) : '--',
+      icon: 'lucide:activity',
+      iconTone: 'warning' as const,
+    },
+    {
       label: '总调用量',
       value: totals ? formatCount(totals.total) : '--',
       icon: 'lucide:message-square-text',
@@ -165,12 +172,6 @@ const callStats = computed(() => {
       value: formatDuration(totals?.avg_success_duration_ms ?? null),
       icon: 'lucide:clock-3',
       iconTone: 'neutral' as const,
-    },
-    {
-      label: 'P95 耗时',
-      value: formatDuration(totals?.p95_success_duration_ms ?? null),
-      icon: 'lucide:history',
-      iconTone: 'warning' as const,
     },
     {
       label: '触发切号',

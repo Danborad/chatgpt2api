@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 from services.config import config
+from services.dashboard_metrics_service import dashboard_metrics_service
 from services.image_service import cleanup_image_retention, delete_to_target, preview_image_retention_cleanup
 from services.log_service import log_service
 from services.storage.coordination_repository import RetentionCleanupRepository
@@ -29,7 +30,8 @@ ImageTargetRunner = Callable[[int, bool], dict[str, Any]]
 def _run_log_cleanup(retention_hours: int, dry_run: bool) -> CleanupResult:
     if dry_run:
         return log_service.preview_cleanup_old(retention_hours)
-    return log_service.cleanup_old(retention_hours)
+    dashboard_metrics_service.sync_from_log_service(log_service)
+    return log_service.cleanup_old(retention_hours, preserve_cursor=True)
 
 
 def _run_image_cleanup(retention_hours: int, dry_run: bool) -> CleanupResult:

@@ -529,13 +529,11 @@ def create_router(app_version: str) -> APIRouter:
     @router.get("/api/dashboard", response_model=DashboardResponseView)
     async def get_dashboard(
         authorization: str | None = Header(default=None),
-        time_range: str = Query(default="24h", pattern="^(24h|7d|30d)$"),
     ):
         require_admin(authorization)
         return await run_in_threadpool(
             build_dashboard_view,
             app_version=app_version,
-            selected_range=time_range,
         )
 
     @router.post("/api/backup/test")

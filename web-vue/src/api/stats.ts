@@ -2,7 +2,7 @@ import apiClient from './client'
 import type { DashboardResponse, DashboardTimeRangeKey } from '@/types/api'
 
 const DASHBOARD_TIME_RANGES: DashboardTimeRangeKey[] = ['24h', '7d', '30d']
-const DASHBOARD_VIEW_SCHEMA_VERSION = 3
+const DASHBOARD_VIEW_SCHEMA_VERSION = 4
 type JsonObject = Record<string, unknown>
 
 function contractError(path: string, expected: string): never {
@@ -68,13 +68,11 @@ function expectRangeKey(value: unknown, path: string): DashboardTimeRangeKey {
 
 function validateTotals(value: unknown, path: string) {
   const totals = expectObject(value, path)
-  ;['total', 'success', 'failed', 'rate_limited', 'final_failed', 'text_review', 'measured'].forEach((field) => {
+  ;['total', 'success', 'final_failed'].forEach((field) => {
     expectNumber(totals[field], `${path}.${field}`, true)
   })
   expectNullableNumber(totals.success_rate, `${path}.success_rate`)
-  ;['avg_success_duration_ms', 'p95_success_duration_ms'].forEach((field) => {
-    expectNullableNumber(totals[field], `${path}.${field}`)
-  })
+  expectNullableNumber(totals.avg_success_duration_ms, `${path}.avg_success_duration_ms`)
 }
 
 function validateBuckets(value: unknown, path: string, expectedCount: number) {
@@ -86,11 +84,11 @@ function validateBuckets(value: unknown, path: string, expectedCount: number) {
     const bucket = expectObject(item, bucketPath)
     ;['label', 'start_at', 'end_at'].forEach((field) => expectString(bucket[field], `${bucketPath}.${field}`))
     ;[
-      'total_calls', 'success_calls', 'final_failed_calls', 'switch_requests',
+      'total_calls', 'success_calls', 'final_failed_calls',
       'switch_count', 'switch_recovered',
     ].forEach((field) => expectNumber(bucket[field], `${bucketPath}.${field}`, true))
     ;[
-      'success_rate', 'avg_success_duration_ms', 'p95_success_duration_ms',
+      'success_rate', 'avg_success_duration_ms',
       'switch_recovery_rate',
     ].forEach((field) => expectNullableNumber(bucket[field], `${bucketPath}.${field}`))
   })
@@ -119,6 +117,14 @@ function validateMetrics(value: unknown) {
   if ((metrics.status === 'ready') !== metrics.ready) contractError('response.metrics.status', 'consistent with ready')
 }
 
+function validateRuntime(value: unknown) {
+  const runtime = expectObject(value, 'response.runtime')
+  expectNumber(runtime.current_concurrency, 'response.runtime.current_concurrency', true)
+  if (Number(runtime.current_concurrency) < 0) {
+    contractError('response.runtime.current_concurrency', 'non-negative integer')
+  }
+}
+
 function validateWindow(value: unknown, path: string, expectedRange: DashboardTimeRangeKey) {
   const window = expectObject(value, path)
   if (expectRangeKey(window.requested, `${path}.requested`) !== expectedRange) {
@@ -139,15 +145,10 @@ function validateTrend(value: unknown, path: string) {
   trend.labels.forEach((label, index) => expectString(label, `${path}.labels[${index}]`))
   const pointCount = trend.labels.length
   ;[
-    'total_requests', 'success_requests', 'failed_requests', 'rate_limited_requests', 'final_failed_requests',
-    'text_review_requests', 'measured_requests', 'switch_requests',
-    'switch_count', 'switch_recovered',
+    'success_requests', 'final_failed_requests', 'switch_count',
   ].forEach((field) => expectNumberArray(trend[field], `${path}.${field}`, pointCount, true))
   expectNullableNumberArray(trend.success_rate, `${path}.success_rate`, pointCount)
-  ;[
-    'model_requests', 'model_success_requests', 'model_failed_requests',
-    'model_rate_limited_requests', 'model_text_review_requests',
-  ].forEach((field) => expectSeriesRecord(trend[field], `${path}.${field}`, pointCount, true))
+  expectSeriesRecord(trend.model_success_requests, `${path}.model_success_requests`, pointCount, true)
   expectNullableSeriesRecord(
     trend.model_avg_success_duration_ms,
     `${path}.model_avg_success_duration_ms`,
@@ -156,39 +157,11 @@ function validateTrend(value: unknown, path: string) {
   return pointCount
 }
 
-function validateModel(value: unknown, path: string, pointCount: number) {
-  const model = expectObject(value, path)
-  expectString(model.name, `${path}.name`)
-  ;[
-    'total_calls', 'success_calls', 'failed_calls', 'rate_limited_calls', 'final_failed_calls',
-    'text_review_calls', 'measured_calls',
-  ].forEach((field) => {
-    expectNumber(model[field], `${path}.${field}`, true)
-  })
-  expectNullableNumber(model.success_rate, `${path}.success_rate`)
-  if (model.avg_success_duration_ms !== null) {
-    expectNumber(model.avg_success_duration_ms, `${path}.avg_success_duration_ms`)
-  }
-  if (model.p95_success_duration_ms !== null) {
-    expectNumber(model.p95_success_duration_ms, `${path}.p95_success_duration_ms`)
-  }
-  ;[
-    'call_series', 'success_series', 'failed_series', 'rate_limited_series', 'final_failed_series', 'text_review_series',
-  ].forEach((field) => expectNumberArray(model[field], `${path}.${field}`, pointCount, true))
-  expectNullableNumberArray(
-    model.avg_success_duration_series_ms,
-    `${path}.avg_success_duration_series_ms`,
-    pointCount,
-  )
-}
-
 function validateRange(value: unknown, path: string, expectedRange: DashboardTimeRangeKey) {
   const range = expectObject(value, path)
   if (expectRangeKey(range.time_range, `${path}.time_range`) !== expectedRange) {
     contractError(`${path}.time_range`, expectedRange)
   }
-  const expectedBucketUnit = expectedRange === '24h' ? 'hour' : 'day'
-  if (range.bucket_unit !== expectedBucketUnit) contractError(`${path}.bucket_unit`, expectedBucketUnit)
   validateWindow(range.window, `${path}.window`, expectedRange)
   validateTotals(range.totals, `${path}.totals`)
   validateSwitching(range.switching, `${path}.switching`)
@@ -196,8 +169,6 @@ function validateRange(value: unknown, path: string, expectedRange: DashboardTim
   const expectedPointCount = expectedRange === '24h' ? 24 : expectedRange === '7d' ? 7 : 30
   if (pointCount !== expectedPointCount) contractError(`${path}.trend.labels`, `string[${expectedPointCount}]`)
   validateBuckets(range.buckets, `${path}.buckets`, expectedPointCount)
-  if (!Array.isArray(range.models)) contractError(`${path}.models`, 'array')
-  range.models.forEach((model, index) => validateModel(model, `${path}.models[${index}]`, pointCount))
 }
 
 function validateAccounts(value: unknown) {
@@ -243,8 +214,6 @@ function parseDashboardResponse(value: unknown): DashboardResponse {
     contractError('response.meta.schema_version', String(DASHBOARD_VIEW_SCHEMA_VERSION))
   }
   expectString(meta.generated_at, 'response.meta.generated_at')
-  expectNumber(meta.metrics_schema_version, 'response.meta.metrics_schema_version', true)
-  expectRangeKey(meta.selected_range, 'response.meta.selected_range')
   if (!Array.isArray(meta.available_ranges)) contractError('response.meta.available_ranges', 'array')
   const availableRanges = meta.available_ranges.map((item, index) => (
     expectRangeKey(item, `response.meta.available_ranges[${index}]`)
@@ -257,6 +226,7 @@ function parseDashboardResponse(value: unknown): DashboardResponse {
   }
 
   validateMetrics(root.metrics)
+  validateRuntime(root.runtime)
   validateAccounts(root.accounts)
   validateStorage(root.storage)
   const ranges = expectObject(root.ranges, 'response.ranges')

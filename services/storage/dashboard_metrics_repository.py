@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -31,20 +32,11 @@ _JSON = JSON().with_variant(JSONB, "postgresql")
 _COUNT_FIELDS = (
     "total",
     "success",
-    "failed",
-    "text_review",
-    "rate_limited",
+    "final_failed",
     "switch_requests",
     "switch_count",
     "switch_recovered",
 )
-_MODEL_COUNT_FIELDS = {
-    "total": "by_model",
-    "success": "model_success",
-    "failed": "model_failed",
-    "text_review": "model_text_review",
-    "rate_limited": "model_rate_limited",
-}
 
 
 class DashboardMetricStateModel(DatabaseBase):
@@ -62,15 +54,12 @@ class DashboardMetricHourlyModel(DatabaseBase):
     bucket_start = Column(String(13), primary_key=True)
     total = Column(BigInteger, nullable=False, default=0)
     success = Column(BigInteger, nullable=False, default=0)
-    failed = Column(BigInteger, nullable=False, default=0)
-    text_review = Column(BigInteger, nullable=False, default=0)
-    rate_limited = Column(BigInteger, nullable=False, default=0)
+    final_failed = Column(BigInteger, nullable=False, default=0)
     switch_requests = Column(BigInteger, nullable=False, default=0)
     switch_count = Column(BigInteger, nullable=False, default=0)
     switch_recovered = Column(BigInteger, nullable=False, default=0)
     success_duration_total_ms = Column(Float, nullable=False, default=0.0)
     success_duration_count = Column(BigInteger, nullable=False, default=0)
-    success_duration_histogram = Column(_JSON, nullable=False, default=list)
 
 
 class DashboardMetricModelHourlyModel(DatabaseBase):
@@ -82,14 +71,9 @@ class DashboardMetricModelHourlyModel(DatabaseBase):
         primary_key=True,
     )
     model = Column(String(255), primary_key=True)
-    total = Column(BigInteger, nullable=False, default=0)
     success = Column(BigInteger, nullable=False, default=0)
-    failed = Column(BigInteger, nullable=False, default=0)
-    text_review = Column(BigInteger, nullable=False, default=0)
-    rate_limited = Column(BigInteger, nullable=False, default=0)
     success_duration_total_ms = Column(Float, nullable=False, default=0.0)
     success_duration_count = Column(BigInteger, nullable=False, default=0)
-    success_duration_histogram = Column(_JSON, nullable=False, default=list)
 
     __table_args__ = (
         Index("ix_dashboard_metric_model_hourly_model", "model", "bucket_start"),
@@ -109,6 +93,34 @@ class DashboardMetricsRepository:
         self.database_url = database_url or resolve_database_url()
         self.engine = initialize_application_database(self.database_url)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
+
+    def reset_schema_if_needed(self) -> bool:
+        """Recreate only the rebuildable Dashboard projection tables."""
+        tables = (
+            DashboardMetricStateModel.__table__,
+            DashboardMetricHourlyModel.__table__,
+            DashboardMetricModelHourlyModel.__table__,
+        )
+        with self.engine.begin() as connection:
+            if self.engine.dialect.name == "postgresql":
+                connection.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": "dashboard_metrics_schema"},
+                )
+            schema = inspect(connection)
+            existing_tables = set(schema.get_table_names())
+            mismatched = any(
+                table.name in existing_tables
+                and {column["name"] for column in schema.get_columns(table.name)}
+                != {column.name for column in table.columns}
+                for table in tables
+            )
+            if not mismatched:
+                return False
+            for table in reversed(tables):
+                table.drop(connection, checkfirst=True)
+            DatabaseBase.metadata.create_all(connection, tables=list(tables))
+            return True
 
     @staticmethod
     def _copy(value: object) -> Any:
@@ -175,23 +187,18 @@ class DashboardMetricsRepository:
                     "success_duration_count": cls._integer(
                         raw_bucket.get("success_duration_count")
                     ),
-                    "success_duration_histogram": cls._copy(
-                        raw_bucket.get("success_duration_histogram")
-                        if isinstance(raw_bucket.get("success_duration_histogram"), list)
-                        else []
-                    ),
                 })
                 hourly[bucket_start] = bucket
 
                 model_names: set[str] = set()
-                for source_field in _MODEL_COUNT_FIELDS.values():
-                    values = raw_bucket.get(source_field)
-                    if isinstance(values, dict):
-                        model_names.update(str(name) for name in values if str(name).strip())
+                success_values = raw_bucket.get("model_success")
+                if isinstance(success_values, dict):
+                    model_names.update(
+                        str(name) for name in success_values if str(name).strip()
+                    )
                 for source_field in (
                     "model_success_total_times",
                     "model_success_time_counts",
-                    "model_success_duration_histograms",
                 ):
                     values = raw_bucket.get(source_field)
                     if isinstance(values, dict):
@@ -199,15 +206,13 @@ class DashboardMetricsRepository:
 
                 duration_totals = raw_bucket.get("model_success_total_times")
                 duration_counts = raw_bucket.get("model_success_time_counts")
-                histograms = raw_bucket.get("model_success_duration_histograms")
                 for model_name in model_names:
                     model_bucket = {
-                        target: cls._integer(
-                            raw_bucket.get(source, {}).get(model_name)
-                            if isinstance(raw_bucket.get(source), dict)
+                        "success": cls._integer(
+                            success_values.get(model_name)
+                            if isinstance(success_values, dict)
                             else 0
-                        )
-                        for target, source in _MODEL_COUNT_FIELDS.items()
+                        ),
                     }
                     model_bucket.update({
                         "success_duration_total_ms": cls._number(
@@ -220,12 +225,6 @@ class DashboardMetricsRepository:
                             if isinstance(duration_counts, dict)
                             else 0
                         ),
-                        "success_duration_histogram": cls._copy(
-                            histograms.get(model_name)
-                            if isinstance(histograms, dict)
-                            and isinstance(histograms.get(model_name), list)
-                            else []
-                        ),
                     })
                     models[(bucket_start, model_name)] = model_bucket
         return state, hourly, models
@@ -236,17 +235,11 @@ class DashboardMetricsRepository:
         payload.update({
             "success_duration_total_ms": cls._number(row.success_duration_total_ms),
             "success_duration_count": cls._integer(row.success_duration_count),
-            "success_duration_histogram": cls._copy(row.success_duration_histogram or []),
         })
         payload.update({
-            "by_model": {},
             "model_success": {},
-            "model_failed": {},
-            "model_text_review": {},
-            "model_rate_limited": {},
             "model_success_total_times": {},
             "model_success_time_counts": {},
-            "model_success_duration_histograms": {},
         })
         return payload
 
@@ -274,16 +267,12 @@ class DashboardMetricsRepository:
             if bucket is None:
                 continue
             model_name = str(row.model)
-            for target, source in _MODEL_COUNT_FIELDS.items():
-                bucket[source][model_name] = cls._integer(getattr(row, target))
+            bucket["model_success"][model_name] = cls._integer(row.success)
             bucket["model_success_total_times"][model_name] = cls._number(
                 row.success_duration_total_ms
             )
             bucket["model_success_time_counts"][model_name] = cls._integer(
                 row.success_duration_count
-            )
-            bucket["model_success_duration_histograms"][model_name] = cls._copy(
-                row.success_duration_histogram or []
             )
 
         data["days"] = days

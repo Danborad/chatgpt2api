@@ -11,8 +11,6 @@ DashboardTimeRange = Literal["24h", "7d", "30d"]
 class DashboardMetaView(BaseModel):
     schema_version: int
     generated_at: str
-    metrics_schema_version: int
-    selected_range: DashboardTimeRange
     available_ranges: list[DashboardTimeRange]
 
 
@@ -27,6 +25,10 @@ class DashboardMetricsView(BaseModel):
     checkpoint_at: str | None
     failure_reason: str | None
     retention_days: int
+
+
+class DashboardRuntimeView(BaseModel):
+    current_concurrency: int = Field(ge=0)
 
 
 class DashboardAccountView(BaseModel):
@@ -50,14 +52,9 @@ class DashboardAccountView(BaseModel):
 class DashboardTotalsView(BaseModel):
     total: int
     success: int
-    failed: int
-    rate_limited: int
     final_failed: int
-    text_review: int
-    measured: int
     success_rate: float | None
     avg_success_duration_ms: float | None
-    p95_success_duration_ms: float | None
 
 
 class DashboardBucketView(BaseModel):
@@ -69,8 +66,6 @@ class DashboardBucketView(BaseModel):
     final_failed_calls: int
     success_rate: float | None
     avg_success_duration_ms: float | None
-    p95_success_duration_ms: float | None
-    switch_requests: int
     switch_count: int
     switch_recovered: int
     switch_recovery_rate: float | None
@@ -83,45 +78,13 @@ class DashboardSwitchingView(BaseModel):
     recovery_rate: float | None
 
 
-class DashboardModelView(BaseModel):
-    name: str
-    total_calls: int
-    success_calls: int
-    failed_calls: int
-    rate_limited_calls: int
-    final_failed_calls: int
-    text_review_calls: int
-    measured_calls: int
-    success_rate: float | None
-    avg_success_duration_ms: float | None
-    p95_success_duration_ms: float | None
-    call_series: list[int]
-    success_series: list[int]
-    failed_series: list[int]
-    rate_limited_series: list[int]
-    final_failed_series: list[int]
-    text_review_series: list[int]
-    avg_success_duration_series_ms: list[float | None]
-
-
 class DashboardTrendView(BaseModel):
     labels: list[str]
-    total_requests: list[int]
     success_requests: list[int]
-    failed_requests: list[int]
-    rate_limited_requests: list[int]
     final_failed_requests: list[int]
-    text_review_requests: list[int]
-    measured_requests: list[int]
     success_rate: list[float | None]
-    switch_requests: list[int]
     switch_count: list[int]
-    switch_recovered: list[int]
-    model_requests: dict[str, list[int]]
     model_success_requests: dict[str, list[int]]
-    model_failed_requests: dict[str, list[int]]
-    model_rate_limited_requests: dict[str, list[int]]
-    model_text_review_requests: dict[str, list[int]]
     model_avg_success_duration_ms: dict[str, list[float | None]]
 
 
@@ -135,12 +98,10 @@ class DashboardWindowView(BaseModel):
 
 class DashboardRangeView(BaseModel):
     time_range: DashboardTimeRange
-    bucket_unit: Literal["hour", "day"]
     window: DashboardWindowView
     totals: DashboardTotalsView
     switching: DashboardSwitchingView
     buckets: list[DashboardBucketView]
-    models: list[DashboardModelView]
     trend: DashboardTrendView
 
 
@@ -164,6 +125,7 @@ class DashboardResponseView(BaseModel):
     version: str
     meta: DashboardMetaView
     metrics: DashboardMetricsView
+    runtime: DashboardRuntimeView
     accounts: DashboardAccountView
     storage: DashboardStorageView
     ranges: dict[DashboardTimeRange, DashboardRangeView]

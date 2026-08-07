@@ -17,6 +17,60 @@ import {
 import { DEFAULT_DASHBOARD_TIME_RANGE, type DashboardTimeRange } from '@/lib/timeRanges'
 import { buildDashboardTrendSeries } from '@/views/dashboard/dashboardTrendSeries'
 
+const SUCCESS_RATE_DEMO_VALUES = [92, 94, 91, 96, 95, 97, 96, 98]
+const SUCCESS_DURATION_DEMO_SECONDS = [48, 54, 46, 59, 52, 49, 56, 51]
+
+function resampleDemoValues(values: number[], pointCount: number) {
+  if (pointCount <= 0) return []
+  if (pointCount === 1) return [values[0]]
+
+  return Array.from({ length: pointCount }, (_, index) => {
+    const position = index * (values.length - 1) / (pointCount - 1)
+    const lowerIndex = Math.floor(position)
+    const upperIndex = Math.ceil(position)
+    if (lowerIndex === upperIndex) return values[lowerIndex]
+
+    const offset = position - lowerIndex
+    return Number((
+      values[lowerIndex] + (values[upperIndex] - values[lowerIndex]) * offset
+    ).toFixed(2))
+  })
+}
+
+function resolveDemoLabels(labels: string[]) {
+  return labels.length > 0
+    ? labels
+    : ['-7h', '-6h', '-5h', '-4h', '-3h', '-2h', '-1h', '当前']
+}
+
+function createStraightAreaLineSeries(
+  name: string,
+  data: Array<number | null>,
+  color: string,
+  areaOpacity: number,
+) {
+  return {
+    name,
+    type: 'line',
+    data,
+    smooth: false,
+    showSymbol: true,
+    connectNulls: true,
+    symbolSize: 5,
+    lineStyle: { width: 2 },
+    areaStyle: { opacity: areaOpacity },
+    itemStyle: { color },
+    emphasis: { disabled: true },
+    z: 2,
+  }
+}
+
+function resolveDashboardBarMaxWidth(pointCount: number) {
+  if (pointCount <= 7) return 96
+  if (pointCount <= 24) return 48
+  return 36
+}
+
 
 export function useDashboardPage() {
   type ChartInstance = {
@@ -108,6 +162,7 @@ export function useDashboardPage() {
 
   const stats = ref(createDefaultStats())
   const dashboardRanges = shallowRef<DashboardResponse['ranges'] | null>(null)
+  const dashboardRuntime = shallowRef<DashboardResponse['runtime'] | null>(null)
 
   // 每个图表独立的数据状态
   function createEmptyChartData() {
@@ -124,7 +179,7 @@ export function useDashboardPage() {
       },
       model: {
         labels: [] as string[],
-        requests: {} as Record<string, number[]>,
+        successRequests: {} as Record<string, number[]>,
       },
       responseTime: {
         labels: [] as string[],
@@ -407,26 +462,41 @@ export function useDashboardPage() {
     }
   }
 
+  function demoChartGraphic() {
+    return {
+      type: 'text',
+      left: 12,
+      top: 8,
+      silent: true,
+      style: {
+        text: '演示数据',
+        fill: '#a3a3a3',
+        fontSize: 11,
+      },
+    }
+  }
+
   function updateModelChart(mode: RenderMode = 'refresh') {
     if (!charts.model) return
 
     const theme = getLineChartTheme()
-    const modelNames = Object.keys(chartData.value.model.requests)
+    const modelNames = Object.keys(chartData.value.model.successRequests)
       .filter((modelName) => (
-        chartData.value.model.requests[modelName] || []
+        chartData.value.model.successRequests[modelName] || []
       ).some((value) => Number(value || 0) > 0))
       .sort((left, right) => {
-        const leftTotal = (chartData.value.model.requests[left] || [])
+        const leftTotal = (chartData.value.model.successRequests[left] || [])
           .reduce((total, value) => total + Number(value || 0), 0)
-        const rightTotal = (chartData.value.model.requests[right] || [])
+        const rightTotal = (chartData.value.model.successRequests[right] || [])
           .reduce((total, value) => total + Number(value || 0), 0)
         return rightTotal - leftTotal || left.localeCompare(right)
       })
     const pointCount = chartData.value.model.labels.length
+    const barMaxWidth = resolveDashboardBarMaxWidth(pointCount)
     const topSeriesIndexByPoint = Array.from({ length: pointCount }, (_, pointIndex) => {
       for (let seriesIndex = modelNames.length - 1; seriesIndex >= 0; seriesIndex -= 1) {
         const value = Number(
-          chartData.value.model.requests[modelNames[seriesIndex]]?.[pointIndex] || 0,
+          chartData.value.model.successRequests[modelNames[seriesIndex]]?.[pointIndex] || 0,
         )
         if (value > 0) return seriesIndex
       }
@@ -436,8 +506,8 @@ export function useDashboardPage() {
       name: modelName,
       type: 'bar',
       stack: 'requests',
-      barMaxWidth: 48,
-      data: (chartData.value.model.requests[modelName] || []).map((value, pointIndex) => ({
+      barMaxWidth,
+      data: (chartData.value.model.successRequests[modelName] || []).map((value, pointIndex) => ({
         value,
         itemStyle: {
           color: getModelColor(modelName),
@@ -530,7 +600,7 @@ export function useDashboardPage() {
 
   function applyModelRangeToChartData(range: DashboardRangeStats) {
     chartData.value.model.labels = range.trend.labels
-    chartData.value.model.requests = range.trend.model_requests
+    chartData.value.model.successRequests = range.trend.model_success_requests
   }
 
   function applyDetailRangeToChartData(range: DashboardRangeStats) {
@@ -567,9 +637,9 @@ export function useDashboardPage() {
         accounts.disabled,
         accounts.total_quota,
       ],
+      runtime: snapshot.runtime,
       ranges: snapshot.meta.available_ranges.map((timeRange) => ({
         timeRange,
-        models: snapshot.ranges[timeRange].models,
         trend: snapshot.ranges[timeRange].trend,
         totals: snapshot.ranges[timeRange].totals,
         switching: snapshot.ranges[timeRange].switching,
@@ -582,6 +652,7 @@ export function useDashboardPage() {
     const nextRenderSignature = getDashboardRenderSignature(snapshot)
     dashboardSnapshot = snapshot
     dashboardRanges.value = snapshot.ranges
+    dashboardRuntime.value = snapshot.runtime
     dashboardDataWarning.value = snapshot.metrics.status === 'degraded'
       ? '统计数据暂未更新，当前展示最近一次可用快照。'
       : ''
@@ -691,6 +762,13 @@ export function useDashboardPage() {
 
     const theme = getLineChartTheme()
     const hasData = chartData.value.successRate.values.some((value) => value !== null)
+    const useDemoData = import.meta.env.DEV && !hasData
+    const labels = useDemoData
+      ? resolveDemoLabels(chartData.value.successRate.labels)
+      : chartData.value.successRate.labels
+    const values = useDemoData
+      ? resampleDemoValues(SUCCESS_RATE_DEMO_VALUES, labels.length)
+      : chartData.value.successRate.values
     applyAnimatedOption('successRate', {
       ...theme,
       tooltip: {
@@ -716,7 +794,7 @@ export function useDashboardPage() {
       },
       xAxis: {
         ...theme.xAxis,
-        data: chartData.value.successRate.labels,
+        data: labels,
       },
       yAxis: {
         ...theme.yAxis,
@@ -726,37 +804,11 @@ export function useDashboardPage() {
           formatter: '{value}%',
         },
       },
-      graphic: hasData ? [] : [emptyChartGraphic('当前范围内暂无可统计请求')],
+      graphic: useDemoData
+        ? [demoChartGraphic()]
+        : (hasData ? [] : [emptyChartGraphic('当前范围内暂无可统计请求')]),
       series: [
-        {
-          name: '成功率',
-          type: 'line',
-          data: chartData.value.successRate.values,
-          smooth: true,
-          showSymbol: true,
-          connectNulls: true,
-          symbolSize: 6,
-          lineStyle: {
-            width: 3,
-          },
-          areaStyle: {
-            opacity: 0.3,
-            color: {
-              type: 'linear',
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
-              colorStops: [
-                { offset: 0, color: chartColors.success },
-                { offset: 1, color: 'rgba(16, 185, 129, 0.1)' },
-              ],
-            },
-          },
-          itemStyle: {
-            color: chartColors.success,
-          },
-        },
+        createStraightAreaLineSeries('成功率', values, chartColors.success, 0.22),
       ],
     }, mode)
   }
@@ -766,8 +818,13 @@ export function useDashboardPage() {
 
     const theme = getLineChartTheme()
     const responseSeriesByModel = chartData.value.responseTime.modelAvgSuccessDurationMs
-    const modelNames = Object.keys(responseSeriesByModel)
+    const realModelNames = Object.keys(responseSeriesByModel)
       .filter((modelName) => (responseSeriesByModel[modelName] || []).some((value) => Number(value || 0) > 0))
+    const useDemoData = import.meta.env.DEV && realModelNames.length === 0
+    const modelNames = useDemoData ? ['演示模型'] : realModelNames
+    const labels = useDemoData
+      ? resolveDemoLabels(chartData.value.responseTime.labels)
+      : chartData.value.responseTime.labels
 
     if (modelNames.length === 0) {
       applyAnimatedOption('responseTime', {
@@ -796,19 +853,12 @@ export function useDashboardPage() {
 
     const series = modelNames.map((modelName) => {
       const color = getModelColor(modelName)
-      const seconds = (responseSeriesByModel[modelName] || []).map((ms) => (
-        ms === null ? null : Number((ms / 1000).toFixed(2))
-      ))
-      return {
-        ...createLineSeries(modelName, seconds, color, {
-          smooth: true,
-          showSymbol: true,
-          areaOpacity: 0.15,
-          zIndex: 2,
-        }),
-        connectNulls: true,
-        symbolSize: 6,
-      }
+      const seconds = useDemoData
+        ? resampleDemoValues(SUCCESS_DURATION_DEMO_SECONDS, labels.length)
+        : (responseSeriesByModel[modelName] || []).map((ms) => (
+            ms === null ? null : Number((ms / 1000).toFixed(2))
+          ))
+      return createStraightAreaLineSeries(modelName, seconds, color, 0.16)
     })
 
     applyAnimatedOption('responseTime', {
@@ -848,7 +898,7 @@ export function useDashboardPage() {
       },
       xAxis: {
         ...theme.xAxis,
-        data: chartData.value.responseTime.labels,
+        data: labels,
       },
       yAxis: {
         ...theme.yAxis,
@@ -857,7 +907,7 @@ export function useDashboardPage() {
           formatter: '{value}s',
         },
       },
-      graphic: [],
+      graphic: useDemoData ? [demoChartGraphic()] : [],
       series,
     }, mode)
   }
@@ -868,9 +918,14 @@ export function useDashboardPage() {
     const theme = getLineChartTheme()
     const buckets = chartData.value.detail.buckets
     const labels = chartData.value.detail.labels
+    const barMaxWidth = resolveDashboardBarMaxWidth(labels.length)
+    const currentConcurrency = dashboardRuntime.value?.current_concurrency ?? 0
+    const currentConcurrencySeries = buckets.map((_, index) => (
+      index === buckets.length - 1 ? currentConcurrency : null
+    ))
     const hasData = buckets.some((bucket) => (
       bucket.total_calls > 0 || bucket.switch_count > 0 || bucket.switch_recovered > 0
-    ))
+    )) || currentConcurrency > 0
     const durationSeconds = (value: number | null) => (
       value === null ? null : Number((value / 1_000).toFixed(2))
     )
@@ -899,7 +954,8 @@ export function useDashboardPage() {
               <span>调用</span><strong>${bucket.total_calls}</strong>
               <span>成功 / 最终失败</span><strong>${bucket.success_calls} / ${bucket.final_failed_calls}</strong>
               <span>成功率</span><strong>${formatPercent(bucket.success_rate)}</strong>
-              <span>平均耗时 / P95</span><strong>${formatDuration(bucket.avg_success_duration_ms)} / ${formatDuration(bucket.p95_success_duration_ms)}</strong>
+              <span>平均耗时</span><strong>${formatDuration(bucket.avg_success_duration_ms)}</strong>
+              <span>当前并发</span><strong>${dataIndex === buckets.length - 1 ? currentConcurrency : '--'}</strong>
               <span>账号切换 / 恢复</span><strong>${bucket.switch_count} / ${bucket.switch_recovered}</strong>
               <span>切换恢复率</span><strong>${formatPercent(bucket.switch_recovery_rate)}</strong>
             </div>`
@@ -907,7 +963,7 @@ export function useDashboardPage() {
       },
       legend: {
         ...theme.legend,
-        data: ['成功', '最终失败', '平均耗时', 'P95', '账号切换', '切换恢复'],
+        data: ['成功', '最终失败', '平均耗时', '当前并发', '账号切换', '切换恢复'],
         top: 0,
         right: 0,
         type: 'scroll',
@@ -947,7 +1003,7 @@ export function useDashboardPage() {
           name: '成功',
           type: 'bar',
           stack: 'result',
-          barMaxWidth: 40,
+          barMaxWidth,
           data: buckets.map((bucket) => bucket.success_calls),
           itemStyle: { color: chartColors.success },
         },
@@ -955,7 +1011,7 @@ export function useDashboardPage() {
           name: '最终失败',
           type: 'bar',
           stack: 'result',
-          barMaxWidth: 40,
+          barMaxWidth,
           data: buckets.map((bucket) => bucket.final_failed_calls),
           itemStyle: { color: chartColors.danger, borderRadius: [4, 4, 0, 0] },
         },
@@ -971,13 +1027,12 @@ export function useDashboardPage() {
         },
         {
           ...createLineSeries(
-            'P95',
-            buckets.map((bucket) => durationSeconds(bucket.p95_success_duration_ms)),
+            '当前并发',
+            currentConcurrencySeries,
             chartColors.warning,
-            { areaOpacity: 0, lineStyle: { type: 'dashed', width: 2 }, zIndex: 3 },
+            { areaOpacity: 0, zIndex: 3 },
           ),
-          yAxisIndex: 1,
-          connectNulls: true,
+          symbolSize: 8,
         },
         {
           ...createLineSeries(
@@ -1002,6 +1057,7 @@ export function useDashboardPage() {
   return {
     stats,
     dashboardRanges,
+    dashboardRuntime,
     dashboardDataReady,
     dashboardLoadError,
     retryDashboard,
