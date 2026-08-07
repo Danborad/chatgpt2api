@@ -62,9 +62,8 @@ try {
   const { parseChangelog, parseReleaseNotes } = await server.ssrLoadModule('/src/lib/release.ts')
   const changelogSource = await readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8')
   const localReleases = parseChangelog(changelogSource)
-  assert.equal(localReleases[0]?.version, 'Unreleased')
-  assert.equal(localReleases[1]?.version, '3.0.0')
-  assert.ok(localReleases[0]?.items.length > 0, 'the root changelog must remain renderable in the update dialog')
+  assert.equal(localReleases[0]?.version, '3.1.0')
+  assert.ok(localReleases[0]?.items.length > 0, 'the released changelog must remain renderable in the update dialog')
   const remoteReleases = parseReleaseNotes(
     'v3.0.1',
     '2026-08-07T00:00:00Z',

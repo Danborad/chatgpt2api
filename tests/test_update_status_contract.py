@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import hashlib
 import io
 import json
+import os
 import shutil
 import tarfile
 import tempfile
@@ -10,6 +12,11 @@ import unittest
 from pathlib import Path
 from typing import Callable
 from unittest.mock import Mock, patch
+
+_TEST_RUNTIME = tempfile.TemporaryDirectory(prefix="chatgpt2api-update-tests-")
+_TEST_DATABASE_PATH = Path(_TEST_RUNTIME.name) / "chatgpt2api-test.db"
+os.environ["CHATGPT2API_AUTH_KEY"] = "test-auth"
+os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DATABASE_PATH.as_posix()}"
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -33,6 +40,16 @@ from services.update_status_service import (
     UpdateCheckError,
     UpdateStatusService,
 )
+
+
+def _cleanup_test_runtime() -> None:
+    from services.application_database import dispose_all_database_engines
+
+    dispose_all_database_engines()
+    _TEST_RUNTIME.cleanup()
+
+
+atexit.register(_cleanup_test_runtime)
 
 
 def _release(tag: str = "v3.1.0") -> dict[str, object]:

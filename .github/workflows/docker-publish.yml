@@ -1,9 +1,12 @@
-name: Publish Docker Image
+name: Verify and Publish
 
 on:
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -40,10 +43,11 @@ jobs:
           cache-dependency-path: web-vue/package-lock.json
 
       - name: Verify console update contract and build
+        working-directory: web-vue
         run: |
-          npm --prefix web-vue ci
-          node web-vue/tests/release-ui-runtime.mjs
-          npm --prefix web-vue run build
+          npm ci
+          node tests/release-ui-runtime.mjs
+          npm run build
 
   release-bundle:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -99,15 +103,26 @@ jobs:
 
           tar -C release -czf release/chatgpt2api-app.tar.gz chatgpt2api-app
           (cd release && sha256sum chatgpt2api-app.tar.gz > checksums.txt)
+          awk -v version="${version}" '
+            /^## / {
+              if (capture) exit
+              capture = index($0, "## " version " - ") == 1
+              next
+            }
+            capture { print }
+          ' CHANGELOG.md > release/release-notes.md
+          test -s release/release-notes.md
 
       - name: Upload online update bundle
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release/release-notes.md
           files: |
             release/chatgpt2api-app.tar.gz
             release/checksums.txt
 
   docker:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: ubuntu-latest
     permissions:
