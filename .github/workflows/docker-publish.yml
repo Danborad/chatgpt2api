@@ -33,7 +33,7 @@ jobs:
       - name: Compile backend
         run: |
           uv sync --frozen
-          uv run python -m compileall -q api contracts services repository
+          uv run python -m compileall -q api contracts models services utils main.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
