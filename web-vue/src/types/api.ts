@@ -225,14 +225,42 @@ export interface VersionInfoResponse {
   commit: string
 }
 
-export interface VersionCheckResponse extends VersionInfoResponse {
-  repository: string
+export interface VersionCheckResponse {
+  current_tag: string
   latest_tag: string
-  latest_version: string
-  release_url: string
-  is_latest: boolean
   update_available: boolean
-  check_error?: string
+  release_url: string
+  status_label: string
+  status_message: string
+  tone: 'success' | 'muted' | 'warning'
+  release_notes: string
+  release_published_at: string
+  can_update: boolean
+}
+
+export interface UpdateTaskEventResponse {
+  id: string
+  timestamp: string
+  label: string
+  message: string
+  tone: 'info' | 'success' | 'warning' | 'danger'
+}
+
+export interface UpdateTaskResponse {
+  task_id: string
+  state: 'idle' | 'queued' | 'running' | 'succeeded' | 'failed'
+  stage: 'idle' | 'queued' | 'checking' | 'downloading' | 'verifying' | 'installing' | 'syncing' | 'restarting' | 'completed' | 'failed'
+  current: number
+  total: number
+  status_label: string
+  message: string
+  tone: 'info' | 'success' | 'warning' | 'danger'
+  busy: boolean
+  current_tag: string
+  latest_tag: string
+  error: string
+  updated_at: string
+  events: UpdateTaskEventResponse[]
 }
 
 export type DashboardTimeRangeKey = '24h' | '7d' | '30d'

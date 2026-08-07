@@ -70,7 +70,7 @@ docker compose up -d
 | OpenAI-compatible API | `http://localhost:3000/v1` |
 | Data directory | `./data` |
 
-`CHATGPT2API_AUTH_KEY` in `.env` takes precedence over `auth-key` in `config.json`. Console settings, upstream accounts, user keys, call records, and metrics are stored in the Application Database. Do not commit local `.env`, `config.json`, or `data/` files.
+`CHATGPT2API_AUTH_KEY` in `.env` takes precedence over `auth-key` in `config.json`. Compose uses a dedicated runtime volume for console-managed online updates. Console settings, upstream accounts, user keys, call records, and metrics are stored in the Application Database. Do not commit local `.env`, `config.json`, or `data/` files.
 
 ### PostgreSQL 18
 

@@ -499,7 +499,7 @@
       :z-index="100"
       panel-class="flex max-h-[min(46rem,calc(100dvh-2rem))] flex-col p-6"
       close-on-backdrop
-      @close="isUpdateDialogOpen = false"
+      @close="closeUpdateDialog"
     >
       <ModalHeader
         title="版本更新"
@@ -507,7 +507,7 @@
         title-class="ui-subsection-title"
         :bordered="false"
         flush
-        @close="isUpdateDialogOpen = false"
+        @close="closeUpdateDialog"
       />
 
       <div class="mt-4 grid gap-3 sm:grid-cols-2">
@@ -625,12 +625,38 @@
           size="xs"
           variant="primary"
           root-class="min-w-14 justify-center"
-          @click="isUpdateDialogOpen = false"
+          @click="closeUpdateDialog"
         >
           知道了
         </Button>
+        <Button
+          v-if="canStartUpdate"
+          size="xs"
+          variant="primary"
+          :disabled="updateProgressState.busy"
+          @click="startUpdate"
+        >
+          立即更新
+        </Button>
       </ModalFooter>
     </ModalShell>
+
+    <OperationProgressDrawer
+      v-if="updateProgressState.open"
+      :open="updateProgressState.open"
+      :title="updateProgressState.title"
+      :subtitle="updateProgressState.subtitle"
+      :total="updateProgressState.total"
+      :current="updateProgressState.current"
+      :status-label="updateProgressState.statusLabel"
+      :error="updateProgressState.error"
+      :busy="updateProgressState.busy"
+      :close-disabled="updateProgressState.busy"
+      :tone="updateProgressState.tone"
+      :events="updateProgressState.events"
+      :summary-items="updateProgressSummary"
+      @close="closeUpdateProgress"
+    />
   </div>
 </template>
 
@@ -648,27 +674,35 @@ import { useAuthStore } from '@/stores/auth'
 import { useModelCatalog } from '@/composables/useModelCatalog'
 import { usePublicRuntimeConfig } from '@/composables/usePublicRuntimeConfig'
 import { useListLayoutPreference } from '@/composables/useListLayoutPreference'
+import { useOperationProgressRuntime } from '@/composables/useOperationProgressRuntime'
 import { ActionMenu, Button, Tooltip, ValueSurface, type ActionMenuItem } from 'nanocat-ui'
 import ConfirmDialog from '@/components/ui/AppConfirmDialog.vue'
 import MetaChip from '@/components/ai/MetaChip.vue'
 import ModalFooter from '@/components/ai/ModalFooter.vue'
 import ModalHeader from '@/components/ai/ModalHeader.vue'
 import ModalShell from '@/components/ai/ModalShell.vue'
+import OperationProgressDrawer from '@/components/ai/OperationProgressDrawer.vue'
 import PageLoadingState from '@/components/ai/PageLoadingState.vue'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 import { useToast } from '@/composables/useToast'
-import { getBooleanPreference, preferenceKeys, setBooleanPreference } from '@/lib/preferences'
+import {
+  getBooleanPreference,
+  getStringPreference,
+  preferenceKeys,
+  removePreference,
+  setBooleanPreference,
+  setStringPreference,
+} from '@/lib/preferences'
 import { writeClipboardText } from '@/lib/clipboard'
 import { focusFirstWithin, focusRefTarget, trapFocusWithin } from '@/lib/focusLoop'
 import { applyThemeMode, getStoredThemeMode, setStoredThemeMode, type ThemeMode } from '@/lib/theme'
 import {
-  isNewerVersion,
-  latestReleasedVersion,
   normalizeVersionTag,
-  parseChangelog,
+  parseReleaseNotes,
   splitReleaseInlineCode,
   type ReleaseInfo,
 } from '@/lib/release'
+import type { UpdateTaskResponse, VersionCheckResponse } from '@/types/api'
 import localVersion from '../../../VERSION?raw'
 
 const route = useRoute()
@@ -688,11 +722,12 @@ const isServiceDialogOpen = ref(false)
 const isUpdateDialogOpen = ref(false)
 const isCheckingUpdate = ref(false)
 const currentVersionTag = ref(normalizeVersionTag(localVersion))
-const latestVersionTag = ref('')
+const updateStatus = ref<VersionCheckResponse | null>(null)
+const updateRequestError = ref('')
+const updateTargetTag = ref('')
+const updateProgressRuntime = useOperationProgressRuntime()
+const updateProgressState = updateProgressRuntime.state
 const releaseEntries = ref<ReleaseInfo[]>([])
-const releaseEntriesSource = ref<'none' | 'local' | 'remote'>('none')
-const updateCheckMessage = ref('')
-const updateCheckStatus = ref<'idle' | 'checking' | 'available' | 'current' | 'warning'>('idle')
 const currentAuthToken = ref('')
 const themeMode = ref<ThemeMode>(getStoredThemeMode())
 const cachedRouteNames = ['Dashboard', 'Studio', 'Accounts', 'Logs', 'Monitor', 'Gallery', 'Proxy', 'Settings']
@@ -853,27 +888,45 @@ const navIconClassMap = computed<Record<string, string>>(() => {
 
 const apiSdkUrl = computed(() => `${apiBaseUrl.value}/v1`)
 const apiKeyDisplay = computed(() => currentAuthToken.value || '未登录')
-const currentVersionLabel = computed(() => normalizeVersionTag(currentVersionTag.value || ''))
-const latestVersionLabel = computed(() => normalizeVersionTag(
-  latestVersionTag.value || latestReleasedVersion(releaseEntries.value) || currentVersionTag.value || '',
+const currentVersionLabel = computed(() => normalizeVersionTag(
+  updateStatus.value?.current_tag || currentVersionTag.value || '',
 ))
-const hasNewVersion = computed(() => isNewerVersion(latestVersionLabel.value, currentVersionLabel.value))
+const latestVersionLabel = computed(() => normalizeVersionTag(
+  updateStatus.value?.latest_tag || currentVersionTag.value || '',
+))
+const hasNewVersion = computed(() => updateStatus.value?.update_available === true)
+const canStartUpdate = computed(() => updateStatus.value?.can_update === true && !updateProgressState.busy)
+const updateProgressSummary = computed(() => [
+  {
+    key: 'current-version',
+    label: '当前版本',
+    value: currentVersionLabel.value || '未知',
+  },
+  {
+    key: 'target-version',
+    label: '目标版本',
+    value: updateTargetTag.value || latestVersionLabel.value || '未知',
+  },
+])
+const updateCheckMessage = computed(() => {
+  if (isCheckingUpdate.value) return updateCheckingMessage
+  return updateRequestError.value || updateStatus.value?.status_message || ''
+})
 const updateCheckMessageClass = computed(() => {
-  if (updateCheckStatus.value === 'available') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
-  if (updateCheckStatus.value === 'checking') return 'border-cyan-500/35 bg-cyan-500/10 text-cyan-700'
-  if (updateCheckStatus.value === 'warning') return 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+  if (isCheckingUpdate.value) return 'border-cyan-500/35 bg-cyan-500/10 text-cyan-700'
+  if (updateRequestError.value || updateStatus.value?.tone === 'warning') return 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+  if (updateStatus.value?.tone === 'success') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
   return 'border-border bg-muted/40 text-muted-foreground'
 })
 const updateCheckBadgeText = computed(() => {
-  if (updateCheckStatus.value === 'available') return '可更新'
-  if (updateCheckStatus.value === 'checking') return '检查中'
-  if (updateCheckStatus.value === 'warning') return '部分失败'
-  return '已是最新'
+  if (isCheckingUpdate.value) return '检查中'
+  if (updateRequestError.value) return '请求失败'
+  return updateStatus.value?.status_label || '未检查'
 })
 const updateCheckBadgeTone = computed(() => {
-  if (updateCheckStatus.value === 'available') return 'success'
-  if (updateCheckStatus.value === 'checking') return 'info'
-  if (updateCheckStatus.value === 'warning') return 'warning'
+  if (isCheckingUpdate.value) return 'info'
+  if (updateRequestError.value || updateStatus.value?.tone === 'warning') return 'warning'
+  if (updateStatus.value?.tone === 'success') return 'success'
   return 'muted'
 })
 function releaseItemTone(type: string): 'default' | 'muted' | 'success' | 'warning' | 'danger' | 'info' {
@@ -938,10 +991,12 @@ const routePendingText = computed(() => `正在加载${currentPageTitle.value}`)
 let systemThemeMedia: MediaQueryList | null = null
 let viewportMedia: MediaQueryList | null = null
 const prefetchedRoutePaths = new Set<string>()
-const releasePageUrl = 'https://github.com/yukkcat/chatgpt2api/releases'
-const latestVersionUrl = 'https://raw.githubusercontent.com/yukkcat/chatgpt2api/main/VERSION'
-const latestChangelogUrl = 'https://raw.githubusercontent.com/yukkcat/chatgpt2api/main/CHANGELOG.md'
+const defaultReleasePageUrl = 'https://github.com/yukkcat/chatgpt2api/releases'
+const releasePageUrl = computed(() => updateStatus.value?.release_url || defaultReleasePageUrl)
 const updateCheckingMessage = '正在检查云端版本...'
+const updateTaskPollIntervalMs = 1000
+let updateTaskPollTimer: number | null = null
+let updateReloadScheduled = false
 const routeViewLoaders: Record<string, () => Promise<unknown>> = {
   '/': () => import('@/views/Dashboard.vue'),
   '/accounts': () => import('@/views/Accounts.vue'),
@@ -1116,90 +1171,143 @@ function cycleThemeMode() {
 
 function openUpdateDialog() {
   isUpdateDialogOpen.value = true
-  updateCheckMessage.value = updateCheckingMessage
-  updateCheckStatus.value = 'checking'
-  void loadLocalReleaseEntries()
   void checkForUpdates(false)
 }
 
 function openReleasePage() {
-  window.open(releasePageUrl, '_blank', 'noopener,noreferrer')
+  window.open(releasePageUrl.value, '_blank', 'noopener,noreferrer')
+  closeUpdateDialog()
 }
 
-async function checkForUpdates(showMessage = true) {
-  if (isCheckingUpdate.value) return
-  isCheckingUpdate.value = true
-  updateCheckStatus.value = 'checking'
-  updateCheckMessage.value = updateCheckingMessage
-
-  const [versionResult, changelogResult] = await Promise.allSettled([
-    fetchRemoteText(latestVersionUrl),
-    fetchRemoteText(latestChangelogUrl),
-  ])
-
-  if (versionResult.status === 'fulfilled') {
-    latestVersionTag.value = normalizeVersionTag(versionResult.value)
+function closeUpdateDialog() {
+  const latestTag = updateStatus.value?.latest_tag || ''
+  if (updateStatus.value?.update_available && latestTag) {
+    setStringPreference(preferenceKeys.updateDismissedTag, latestTag)
   }
-  if (changelogResult.status === 'fulfilled') {
-    const remoteReleases = parseChangelog(changelogResult.value)
-    if (remoteReleases.length) {
-      releaseEntries.value = remoteReleases
-      releaseEntriesSource.value = 'remote'
+  isUpdateDialogOpen.value = false
+}
+
+function clearUpdateTaskPollTimer() {
+  if (updateTaskPollTimer === null) return
+  window.clearTimeout(updateTaskPollTimer)
+  updateTaskPollTimer = null
+}
+
+function applyUpdateTask(task: UpdateTaskResponse, open: boolean) {
+  if (task.state === 'idle') return
+  updateTargetTag.value = normalizeVersionTag(task.latest_tag || updateTargetTag.value)
+  currentVersionTag.value = normalizeVersionTag(task.current_tag || currentVersionTag.value)
+  updateProgressState.open = open
+  updateProgressState.title = task.busy ? '正在更新 ChatGPT2API' : 'ChatGPT2API 更新'
+  updateProgressState.subtitle = task.latest_tag ? `目标版本 ${normalizeVersionTag(task.latest_tag)}` : ''
+  updateProgressState.total = task.total
+  updateProgressState.current = task.current
+  updateProgressState.statusLabel = task.status_label
+  updateProgressState.message = task.message
+  updateProgressState.error = task.error
+  updateProgressState.busy = task.busy
+  updateProgressState.tone = task.tone
+  updateProgressState.events = task.events.map(event => ({
+    key: event.id,
+    timestamp: event.timestamp,
+    label: event.label,
+    message: event.message,
+    tone: event.tone,
+  }))
+}
+
+function scheduleUpdateTaskPoll() {
+  clearUpdateTaskPollTimer()
+  updateTaskPollTimer = window.setTimeout(() => {
+    void pollUpdateTask()
+  }, updateTaskPollIntervalMs)
+}
+
+async function startUpdate() {
+  if (!canStartUpdate.value) return
+  const targetTag = normalizeVersionTag(updateStatus.value?.latest_tag || '')
+  if (!targetTag) return
+
+  clearUpdateTaskPollTimer()
+  updateTargetTag.value = targetTag
+  isUpdateDialogOpen.value = false
+
+  try {
+    const task = await versionApi.startUpdate()
+    setStringPreference(preferenceKeys.updateActiveTaskId, task.task_id)
+    applyUpdateTask(task, true)
+    if (task.busy) scheduleUpdateTaskPoll()
+    else await checkForUpdates(false)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '在线更新失败，请稍后重试。'
+    toast.error(message)
+  }
+}
+
+async function pollUpdateTask() {
+  try {
+    const task = await versionApi.updateTask()
+    const activeTaskId = getStringPreference(preferenceKeys.updateActiveTaskId)
+    const shouldOpen = task.busy || Boolean(task.task_id && task.task_id === activeTaskId)
+    applyUpdateTask(task, shouldOpen)
+    if (task.busy) {
+      scheduleUpdateTaskPoll()
+      return
     }
-  }
-
-  const fullySuccessful = versionResult.status === 'fulfilled' && changelogResult.status === 'fulfilled'
-  const fullyFailed = versionResult.status === 'rejected' && changelogResult.status === 'rejected'
-  const newVersionAvailable = hasNewVersion.value
-  if (fullyFailed) {
-    updateCheckStatus.value = 'warning'
-    updateCheckMessage.value = '云端版本与更新日志获取失败，当前展示本地信息。'
-  } else if (!fullySuccessful) {
-    updateCheckStatus.value = newVersionAvailable ? 'available' : 'warning'
-    updateCheckMessage.value = newVersionAvailable
-      ? `发现新版本：${latestVersionLabel.value}（部分云端信息获取失败）`
-      : '部分云端信息获取失败，已展示可用的版本信息。'
-  } else if (newVersionAvailable) {
-    updateCheckStatus.value = 'available'
-    updateCheckMessage.value = `发现新版本：${latestVersionLabel.value}`
-  } else {
-    updateCheckStatus.value = 'current'
-    updateCheckMessage.value = `当前已是最新版本：${currentVersionLabel.value || latestVersionLabel.value}`
-  }
-
-  if (showMessage) {
-    if (fullyFailed || !fullySuccessful) toast.warning(updateCheckMessage.value)
-    else if (newVersionAvailable) toast.info(updateCheckMessage.value)
-    else toast.success(updateCheckMessage.value)
-  }
-  isCheckingUpdate.value = false
-}
-
-async function fetchRemoteText(url: string) {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), 8000)
-  try {
-    const response = await fetch(url, { cache: 'no-store', signal: controller.signal })
-    if (!response.ok) throw new Error(`云端返回 ${response.status}`)
-    return response.text()
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
-
-async function loadLocalReleaseEntries() {
-  if (releaseEntriesSource.value !== 'none') return
-  try {
-    const module = await import('../../../CHANGELOG.md?raw')
-    const localReleases = parseChangelog(module.default || '')
-    if (releaseEntriesSource.value === 'none') {
-      releaseEntries.value = localReleases
-      releaseEntriesSource.value = 'local'
+    clearUpdateTaskPollTimer()
+    await checkForUpdates(false)
+    const targetTag = normalizeVersionTag(task.latest_tag)
+    if (
+      !updateReloadScheduled
+      && task.state === 'succeeded'
+      && targetTag
+      && normalizeVersionTag(localVersion) !== targetTag
+    ) {
+      updateReloadScheduled = true
+      window.setTimeout(() => window.location.reload(), 400)
     }
   } catch {
-    if (releaseEntriesSource.value === 'none') {
-      releaseEntries.value = []
+    if (updateProgressState.busy) scheduleUpdateTaskPoll()
+  }
+}
+
+function closeUpdateProgress() {
+  if (!updateProgressRuntime.close()) return
+  clearUpdateTaskPollTimer()
+  removePreference(preferenceKeys.updateActiveTaskId)
+}
+
+async function checkForUpdates(showMessage = true, openAvailable = false) {
+  if (isCheckingUpdate.value) return
+  isCheckingUpdate.value = true
+  updateRequestError.value = ''
+  try {
+    const result = await versionApi.check(showMessage)
+    updateStatus.value = result
+    currentVersionTag.value = result.current_tag
+    const remoteEntries = parseReleaseNotes(
+      result.latest_tag,
+      result.release_published_at,
+      result.release_notes,
+    )
+    releaseEntries.value = remoteEntries
+    if (
+      openAvailable
+      && result.update_available
+      && getStringPreference(preferenceKeys.updateDismissedTag) !== result.latest_tag
+    ) {
+      isUpdateDialogOpen.value = true
     }
+    if (showMessage) {
+      if (result.tone === 'warning') toast.warning(result.status_message)
+      else if (result.update_available) toast.info(result.status_message)
+      else toast.success(result.status_message)
+    }
+  } catch {
+    updateRequestError.value = '无法连接后端检查更新，请稍后重试。'
+    if (showMessage) toast.warning(updateRequestError.value)
+  } finally {
+    isCheckingUpdate.value = false
   }
 }
 
@@ -1208,14 +1316,7 @@ async function loadCurrentVersion() {
     const result = await versionApi.current()
     const runtimeVersion = String(result.tag || '').trim()
     if (runtimeVersion) currentVersionTag.value = runtimeVersion
-    if (!latestVersionTag.value) {
-      latestVersionTag.value = normalizeVersionTag(latestReleasedVersion(releaseEntries.value) || currentVersionTag.value)
-    }
-  } catch {
-    if (!latestVersionTag.value) {
-      latestVersionTag.value = normalizeVersionTag(latestReleasedVersion(releaseEntries.value) || currentVersionTag.value)
-    }
-  }
+  } catch {}
 }
 
 function handleSystemThemeChange() {
@@ -1260,6 +1361,10 @@ onMounted(() => {
   window.addEventListener(PUBLIC_SETTINGS_CHANGED_EVENT, handlePublicSettingsChanged)
   window.addEventListener('keydown', handleWindowKeydown)
   void loadCurrentVersion()
+  if (authStore.isAdmin) {
+    void checkForUpdates(false, true)
+    void pollUpdateTask()
+  }
   void loadPublicRuntimeConfig()
 })
 
@@ -1269,6 +1374,7 @@ onBeforeUnmount(() => {
   systemThemeMedia?.removeEventListener('change', handleSystemThemeChange)
   systemThemeMedia = null
   teardownViewportListener()
+  clearUpdateTaskPollTimer()
 })
 
 </script>

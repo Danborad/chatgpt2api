@@ -2,7 +2,7 @@
 
 状态：当前
 
-本项目的发布镜像默认是 `ghcr.io/yukkcat/chatgpt2api:latest`。标准 Compose 将服务暴露在 `3000` 端口，并挂载本地 `data/` 和 `config.json`。运行时配置和数据不应提交到 Git。
+本项目的发布镜像默认是 `ghcr.io/yukkcat/chatgpt2api:latest`。标准 Compose 将服务暴露在 `3000` 端口，使用 `chatgpt2api-runtime` 命名卷保存可更新的应用运行目录，并单独挂载本地 `data/` 和 `config.json`。运行时配置和数据不应提交到 Git。
 
 ## Docker 部署
 
@@ -14,6 +14,8 @@ cp .env.example .env
 test -f config.json || printf '{}\n' > config.json
 docker compose up -d
 ```
+
+镜像中的 `/opt/chatgpt2api` 是只读应用种子，`/app` 是受管运行目录。首次启动或镜像版本变化时，入口脚本会用镜像种子刷新 `/app`，再按锁文件同步 Python 依赖；同一镜像正常重启时会保留控制台在线更新后的运行版本。业务数据始终留在独立的 `data/` 挂载中。
 
 ### 本地 PostgreSQL 18
 
@@ -118,6 +120,22 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml exec -T post
   > backups/chatgpt2api-$(date +%Y%m%d-%H%M%S).pgdump
 ```
 
+### 控制台在线更新
+
+使用当前标准 Compose 部署时，版本弹窗可直接启动在线更新。后端负责下载发布包、校验 SHA-256 与更新清单、替换运行文件、同步依赖和安排容器重启；前端只展示后端任务，刷新页面或重启完成后仍可恢复任务结果。文件或依赖同步失败时会恢复旧文件，并按旧锁文件重新同步依赖。
+
+源码运行和没有挂载受管 `/app` 运行目录的旧容器不会显示“立即更新”，只会给出 Git 或镜像升级提示。首次切换到受管运行目录时，应先更新仓库中的 Compose 文件，再执行一次镜像升级：
+
+```bash
+git pull --ff-only
+docker compose pull
+docker compose up -d
+```
+
+不要把 `/app` 运行时卷当作业务备份；它可以从发布镜像重新创建。不要使用 `docker compose down -v` 执行普通升级，因为该命令还会删除 Compose 管理的命名卷。
+
+### 命令行升级
+
 镜像部署升级：
 
 ```bash
@@ -132,7 +150,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml pull
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-镜像部署固定或回退版本时，在 `.env` 设置 `CHATGPT2API_IMAGE=ghcr.io/yukkcat/chatgpt2api:<tag>`，再执行对应的 `pull` 与 `up`。Git 检出标签只影响源码运行，不会改变 Compose 使用的镜像版本。升级后检查：
+镜像部署固定或回退版本时，在 `.env` 设置 `CHATGPT2API_IMAGE=ghcr.io/yukkcat/chatgpt2api:<tag>`，再执行对应的 `pull` 与 `up`。镜像版本变化后，入口脚本会用该镜像刷新受管运行目录；Git 检出标签只影响源码运行，不会改变 Compose 使用的镜像版本。升级后检查：
 
 ```bash
 docker compose ps

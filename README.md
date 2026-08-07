@@ -74,7 +74,7 @@ docker compose up -d
 | OpenAI 兼容 API | `http://localhost:3000/v1` |
 | 数据目录        | `./data`                   |
 
-`.env` 中的 `CHATGPT2API_AUTH_KEY` 优先于 `config.json` 的 `auth-key`。控制台设置、账号、用户密钥、调用日志和指标写入 Application Database；不要提交本地 `.env`、`config.json` 或 `data/`。
+`.env` 中的 `CHATGPT2API_AUTH_KEY` 优先于 `config.json` 的 `auth-key`。Compose 使用独立运行时卷支持控制台在线更新；控制台设置、账号、用户密钥、调用日志和指标写入 Application Database。不要提交本地 `.env`、`config.json` 或 `data/`。
 
 ### PostgreSQL 18
 

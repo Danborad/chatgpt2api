@@ -20,6 +20,8 @@ export const preferenceKeys = {
   studioImageModel: 'studio-image-model',
   studioSidebarWidth: 'studio-sidebar-width',
   themeMode: 'theme-mode',
+  updateActiveTaskId: 'update-active-task-id',
+  updateDismissedTag: 'update-dismissed-tag',
 } as const
 
 type PreferenceKey = typeof preferenceKeys[keyof typeof preferenceKeys]

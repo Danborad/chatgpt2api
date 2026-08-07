@@ -10,7 +10,105 @@ env:
   IMAGE_NAME: chatgpt2api
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Verify backend update contract
+        run: |
+          uv sync --frozen
+          uv run pytest -q tests/test_update_status_contract.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-vue/package-lock.json
+
+      - name: Verify console update contract and build
+        run: |
+          npm --prefix web-vue ci
+          node web-vue/tests/release-ui-runtime.mjs
+          npm --prefix web-vue run build
+
+  release-bundle:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-vue/package-lock.json
+
+      - name: Build runtime bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix web-vue ci
+          npm --prefix web-vue run build
+
+          bundle="release/chatgpt2api-app"
+          mkdir -p "${bundle}/scripts/image_upscale"
+          cp main.py VERSION pyproject.toml uv.lock "${bundle}/"
+          cp -R api contracts services utils "${bundle}/"
+          cp scripts/image_upscale/upscale.mjs "${bundle}/scripts/image_upscale/"
+          cp -R web-vue/dist "${bundle}/web_dist"
+
+          version="$(tr -d '\r\n' < VERSION)"
+          cat > "${bundle}/update-manifest.json" <<EOF
+          {
+            "format": 1,
+            "version": "${version}",
+            "paths": [
+              "main.py",
+              "VERSION",
+              "api",
+              "contracts",
+              "services",
+              "utils",
+              "scripts/image_upscale/upscale.mjs",
+              "pyproject.toml",
+              "uv.lock",
+              "web_dist"
+            ]
+          }
+          EOF
+
+          tar -C release -czf release/chatgpt2api-app.tar.gz chatgpt2api-app
+          (cd release && sha256sum chatgpt2api-app.tar.gz > checksums.txt)
+
+      - name: Upload online update bundle
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/chatgpt2api-app.tar.gz
+            release/checksums.txt
+
   docker:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

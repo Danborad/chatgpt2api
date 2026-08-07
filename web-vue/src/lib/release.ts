@@ -36,7 +36,9 @@ export function parseChangelog(content: string): ReleaseInfo[] {
     .slice(1)
     .map((block) => {
       const [title = '', ...lines] = block.trim().split('\n')
-      const [, version = title.trim(), date = ''] = title.match(/^(.+?)(?:\s+-\s+(.+))?$/) || []
+      const releaseTitle = title.trim().match(/^(.+?)\s+-\s+(.+)$/)
+      const version = releaseTitle?.[1] || title.trim()
+      const date = releaseTitle?.[2] || ''
       return {
         version: version.trim(),
         date: date.trim(),
@@ -49,70 +51,26 @@ export function parseChangelog(content: string): ReleaseInfo[] {
     .filter((release) => release.items.length)
 }
 
+export function parseReleaseNotes(version: string, publishedAt: string, content: string): ReleaseInfo[] {
+  const items: ReleaseInfo['items'] = []
+  for (const rawLine of String(content || '').split('\n')) {
+    const line = rawLine.trim()
+    const match = line.match(/^\+\s+\[(.+?)]\s+(.+)$/)
+    if (match) {
+      items.push({ type: match[1], content: match[2] })
+      continue
+    }
+    if (line && items.length && !line.startsWith('#') && !line.startsWith('>')) {
+      items[items.length - 1].content += ` ${line}`
+    }
+  }
+  if (!items.length) return []
+  const date = /^\d{4}-\d{2}-\d{2}/.exec(String(publishedAt || '').trim())?.[0] || ''
+  return [{ version: normalizeVersionTag(version), date, items }]
+}
+
 export function normalizeVersionTag(value: string): string {
   const clean = value.trim()
   if (!clean) return ''
   return clean.startsWith('v') ? clean : `v${clean}`
-}
-
-export function latestReleasedVersion(releases: ReleaseInfo[]): string {
-  return releases.find((release) => parseVersion(release.version))?.version || ''
-}
-
-type ParsedVersion = {
-  core: [number, number, number]
-  prerelease: string[]
-}
-
-function parseVersion(value: string): ParsedVersion | null {
-  const match = value.trim().match(
-    /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/,
-  )
-  if (!match) return null
-  return {
-    core: [Number(match[1]), Number(match[2]), Number(match[3])],
-    prerelease: match[4] ? match[4].split('.') : [],
-  }
-}
-
-function comparePrereleaseIdentifier(left: string, right: string): number {
-  const leftIsNumeric = /^\d+$/.test(left)
-  const rightIsNumeric = /^\d+$/.test(right)
-  if (leftIsNumeric && rightIsNumeric) return Number(left) - Number(right)
-  if (leftIsNumeric !== rightIsNumeric) return leftIsNumeric ? -1 : 1
-  if (left === right) return 0
-  return left < right ? -1 : 1
-}
-
-function compareVersions(leftValue: string, rightValue: string): number | null {
-  const left = parseVersion(leftValue)
-  const right = parseVersion(rightValue)
-  if (!left || !right) return null
-
-  for (let index = 0; index < left.core.length; index += 1) {
-    if (left.core[index] !== right.core[index]) {
-      return left.core[index] - right.core[index]
-    }
-  }
-
-  if (!left.prerelease.length || !right.prerelease.length) {
-    if (left.prerelease.length === right.prerelease.length) return 0
-    return left.prerelease.length ? -1 : 1
-  }
-
-  const identifierCount = Math.max(left.prerelease.length, right.prerelease.length)
-  for (let index = 0; index < identifierCount; index += 1) {
-    const leftIdentifier = left.prerelease[index]
-    const rightIdentifier = right.prerelease[index]
-    if (leftIdentifier === undefined) return -1
-    if (rightIdentifier === undefined) return 1
-    const comparison = comparePrereleaseIdentifier(leftIdentifier, rightIdentifier)
-    if (comparison !== 0) return comparison
-  }
-  return 0
-}
-
-export function isNewerVersion(latestVersion: string, currentVersion: string): boolean {
-  const comparison = compareVersions(latestVersion, currentVersion)
-  return comparison !== null && comparison > 0
 }
