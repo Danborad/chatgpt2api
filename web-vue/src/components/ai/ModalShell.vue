@@ -50,7 +50,7 @@ const emit = defineEmits<{
 const resolvedPanelClass = computed(() => [
   props.panelClass,
   props.scrollable
-    ? 'flex min-h-0 max-h-[calc(100dvh-1rem)] flex-col overflow-hidden sm:max-h-[calc(100dvh-2rem)]'
+    ? 'flex min-h-0 max-h-[calc(100dvh-2rem)] flex-col overflow-hidden'
     : '',
 ].filter(Boolean).join(' '))
 </script>

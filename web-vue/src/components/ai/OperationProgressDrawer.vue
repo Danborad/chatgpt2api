@@ -116,6 +116,7 @@
 
   <SideDock
     :open="open && minimized"
+    :draggable="true"
     aria-label="展开任务面板"
     :aria-describedby="dockStatusId"
     :z-index="zIndex"
