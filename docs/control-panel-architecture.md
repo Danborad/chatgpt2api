@@ -10,6 +10,7 @@ those calls without becoming another source of business semantics.
 
 Domain names and storage ownership are defined in [`../CONTEXT.md`](../CONTEXT.md).
 The accepted decisions in [`adr/`](adr/) override this document when necessary.
+Current code navigation is maintained in [`maps/`](maps/).
 
 ## Data flow
 
@@ -45,7 +46,8 @@ HTML rendering.
 | `/gallery` | Browse and manage Image Assets |
 | `/studio` | Run text, search, image, and editable-file workflows; follow owner-scoped asynchronous tasks |
 
-There is no current documentation-center, debug-center, or registration-machine route.
+There is no current documentation-center or registration-machine route.
+`/debug` is only a redirect to Studio, not a separate debug-center page.
 Prompt Library is a cross-page capability: Settings manages Prompt Sources, while
 Studio consumes the resulting Prompt Library.
 
@@ -72,10 +74,16 @@ querying, and deleting the task remain owner-scoped operations.
 
 ## Persistence ownership
 
-- The Account Storage Backend stores Upstream Accounts and User Keys.
-- Call Records, real-time observations, Image Tasks, Editable File Tasks, Image Assets, and Editable File Assets have
-  separate persistence responsibilities; changing Account Storage Backend does
-  not implicitly move them.
+- The Application Database is one physical SQLite or PostgreSQL database used
+  by separate domain repositories; it is not a generic repository.
+- The Account Repository stores Upstream Accounts and User Keys only. Settings,
+  proxy configuration, Call Records, dashboard aggregates, Prompt Library
+  state, remote-import configuration, coordination state, and Editable File
+  Tasks retain separate repository interfaces and transaction ownership while
+  sharing the Application Database.
+- Real-time observations, Image Tasks, Image Assets, gallery files, and Editable
+  File Assets remain outside the Application Database and retain their own
+  lifecycle owners.
 - `ImageStorageService` owns primary Image Asset mutations and catalog effects.
   See ADR 0003 for deletion, synchronization, and concurrency rules.
 

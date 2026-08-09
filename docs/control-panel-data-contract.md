@@ -26,6 +26,12 @@
 | 可编辑文件 | `/v1/editable-file-tasks`、`services/editable_file_task_service.py` | Studio 的独立文件任务运行时 |
 | 提示词库 | `/api/prompts`、`contracts/prompts.py` | Studio 和设置中的提示词来源界面 |
 
+## 概览中心
+
+`GET /api/dashboard` 一次返回三个所有权清晰的投影：`ranges` 是 Application Database 中 Dashboard 指标的 `24h`、`7d`、`30d` 持久化汇总，`runtime` 是当前进程与运行环境的实时采样，`operations` 是当前 Active Requests 数量。前端只校验并展示这些字段，不扫描 Call Records，也不从实时监控详情反算并发。
+
+图表默认周期和自动刷新间隔属于浏览器交互偏好，由 Dashboard 页面 Module 通过 `localStorage` 持有，不进入后端系统设置或 Application Database。每次重新进入概览页面时，五张图读取同一个默认周期；进入页面后仍可分别切换。浏览器标签页仅从隐藏恢复可见时继续现有选择，不重置图表周期。
+
 ## 调用和图片结果
 
 `CallOutcome` 的当前值为 `success`、`failed`、`rate_limited`、`text_review`、`partial_success` 和 `unknown`。日志、实时监控和概览读取同一套后端结果投影；它们可以显示不同粒度，但不能各自重新分类。
