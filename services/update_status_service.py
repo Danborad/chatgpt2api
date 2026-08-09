@@ -13,6 +13,7 @@ from urllib.parse import quote
 from curl_cffi import requests as curl_requests
 
 from contracts.updates import UpdateStatusView
+from utils.container_runtime import is_containerized as _in_docker
 from utils.log import logger
 
 
@@ -187,11 +188,7 @@ def _build_type() -> str:
     if configured in {"source", "release"}:
         return configured
     root = Path(__file__).resolve().parents[1]
-    return "release" if Path("/.dockerenv").exists() and root.joinpath("web_dist").is_dir() else "source"
-
-
-def _in_docker() -> bool:
-    return Path("/.dockerenv").exists()
+    return "release" if _in_docker() and root.joinpath("web_dist").is_dir() else "source"
 
 
 def _has_dedicated_mount(path: Path) -> bool:

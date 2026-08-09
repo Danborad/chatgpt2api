@@ -633,10 +633,10 @@
           v-if="canStartUpdate"
           size="xs"
           variant="primary"
-          :disabled="updateProgressState.busy"
+          :disabled="updateProgressState.busy || isUpdateConfirming"
           @click="startUpdate"
         >
-          立即更新
+          {{ isUpdateConfirming ? '等待确认' : '立即更新' }}
         </Button>
       </ModalFooter>
     </ModalShell>
@@ -721,6 +721,7 @@ const isApiInfoOpen = ref(false)
 const isServiceDialogOpen = ref(false)
 const isUpdateDialogOpen = ref(false)
 const isCheckingUpdate = ref(false)
+const isUpdateConfirming = ref(false)
 const currentVersionTag = ref(normalizeVersionTag(localVersion))
 const updateStatus = ref<VersionCheckResponse | null>(null)
 const updateRequestError = ref('')
@@ -1224,9 +1225,23 @@ function scheduleUpdateTaskPoll() {
 }
 
 async function startUpdate() {
-  if (!canStartUpdate.value) return
+  if (isUpdateConfirming.value || !canStartUpdate.value) return
   const targetTag = normalizeVersionTag(updateStatus.value?.latest_tag || '')
   if (!targetTag) return
+
+  isUpdateConfirming.value = true
+  let confirmed = false
+  try {
+    confirmed = await confirmDialog.ask({
+      title: '确认更新',
+      message: `检测到新版本 ${targetTag}，当前版本为 ${currentVersionLabel.value || '版本未知'}。确认后将下载并安装更新，服务会自动重启，通常需要 30 秒至 2 分钟。`,
+      confirmText: '立即更新',
+      cancelText: '取消',
+    })
+  } finally {
+    isUpdateConfirming.value = false
+  }
+  if (!confirmed) return
 
   clearUpdateTaskPollTimer()
   updateTargetTag.value = targetTag
