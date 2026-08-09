@@ -39,6 +39,8 @@
               :account-processing-concurrency-field="accountProcessingConcurrencyField"
             />
 
+            <SettingsDashboardPreferencesPanel />
+
             <FormSection title="全局附加指令">
               <FormField label="全局系统提示词">
                 <template #label-extra>
@@ -306,6 +308,7 @@ import {
   type SettingsFields,
 } from '@/views/settings/settingsView'
 import SettingsBasicConfigPanel from '@/views/settings/SettingsBasicConfigPanel.vue'
+import SettingsDashboardPreferencesPanel from '@/views/settings/SettingsDashboardPreferencesPanel.vue'
 import SettingsBasicPolicyPanel from '@/views/settings/SettingsBasicPolicyPanel.vue'
 import SettingsBackupPanel from '@/views/settings/SettingsBackupPanel.vue'
 import SettingsExternalSourceModals from '@/views/settings/SettingsExternalSourceModals.vue'
