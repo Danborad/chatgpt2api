@@ -26,8 +26,18 @@ Executable documentation rules live in
 | [`../.codex/rules/`](../.codex/rules/) | Executable AI and automation development rules |
 | [`adr/`](adr/) | Accepted architecture decisions |
 | [`requirements/`](requirements/) | PRDs, acceptance criteria, and their lifecycle |
+| [`maps/`](maps/) | Curated maps of the current implementation |
 | [`runbooks/`](runbooks/) | Repeatable deployment, recovery, and operations procedures |
 | [`references/upstream-projects.md`](references/upstream-projects.md) | Upstream projects and tool-usage boundaries |
+
+## Current maps
+
+| Map | Purpose |
+| --- | --- |
+| [`maps/system-map.md`](maps/system-map.md) | Runtime, authority, and persistence boundaries |
+| [`maps/backend-map.md`](maps/backend-map.md) | Routers, services, projections, and repositories |
+| [`maps/frontend-map.md`](maps/frontend-map.md) | Routes, page runtimes, API adapters, and UI ownership |
+| [`maps/critical-flows.md`](maps/critical-flows.md) | Import, Image Task, observability, dashboard, and update lifecycles |
 
 ## Current documents
 
