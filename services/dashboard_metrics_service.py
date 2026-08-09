@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-import copy
 import re
 import threading
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from services.call_view import call_outcome, call_switch_count
 from services.storage.dashboard_metrics_repository import (
     DashboardMetricsRepository,
+    DashboardMetricsSourceChanged,
+    DashboardMetricsState,
+    DashboardMetricsWriteConflict,
 )
 from utils.log import logger
 from utils.timezone import beijing_now, parse_to_beijing_naive
 
 
-DASHBOARD_METRICS_RETENTION_DAYS = 60
+DASHBOARD_METRICS_RETENTION_DAYS = 30
 DASHBOARD_TIME_RANGES = ("24h", "7d", "30d")
 DASHBOARD_METRICS_REFRESH_INTERVAL_SECS = 10.0
 
@@ -149,8 +152,6 @@ def _merge_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
                 numeric = 0.0 if key == "model_success_total_times" else 0
             target_map[str(name)] = target_map.get(str(name), 0) + numeric
 
-    return
-
 
 def _percentage(numerator: int, denominator: int) -> float | None:
     return round(numerator * 100 / denominator, 2) if denominator > 0 else None
@@ -180,50 +181,23 @@ def _bucket_metrics(bucket: dict[str, Any]) -> dict[str, Any]:
         "switch_recovery_rate": _percentage(switch_recovered, switch_requests),
     }
 
-def _empty_metrics_data() -> dict[str, Any]:
-    return {
-        "days": {},
-        "ingest": {
-            "initialized": False,
-            "status": "uninitialized",
-            "stale": True,
-            "last_event_id": None,
-            "last_event_at": None,
-            "checkpoint_at": None,
-            "failure_reason": None,
-        },
-    }
+
+def _retention_start(now: datetime | None = None) -> datetime:
+    current = now or _beijing_now_naive()
+    return (current - timedelta(days=DASHBOARD_METRICS_RETENTION_DAYS - 1)).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
 
-def _merge_metrics_data(target: dict[str, Any], source: dict[str, Any]) -> None:
-    target_days = target.setdefault("days", {})
-    source_days = source.get("days") if isinstance(source.get("days"), dict) else {}
-    for day_key, source_day in source_days.items():
-        if not isinstance(source_day, dict):
-            continue
-        target_day = target_days.setdefault(str(day_key), _empty_bucket())
-        if not isinstance(target_day, dict):
-            target_day = _empty_bucket()
-            target_days[str(day_key)] = target_day
-        _merge_bucket(target_day, source_day)
-
-        target_hours = target_day.get("hours")
-        if not isinstance(target_hours, dict):
-            target_hours = {}
-            target_day["hours"] = target_hours
-        source_hours = source_day.get("hours") if isinstance(source_day.get("hours"), dict) else {}
-        for hour_key, source_hour in source_hours.items():
-            if not isinstance(source_hour, dict):
-                continue
-            target_hour = target_hours.setdefault(str(hour_key), _empty_bucket())
-            if not isinstance(target_hour, dict):
-                target_hour = _empty_bucket()
-                target_hours[str(hour_key)] = target_hour
-            _merge_bucket(target_hour, source_hour)
+def _retention_cutoff(now: datetime | None = None) -> str:
+    return _retention_start(now).strftime("%Y-%m-%dT%H")
 
 
 class DashboardMetricsService:
-    """Rebuildable rolling aggregates derived from the canonical call log."""
+    """Own the incremental hourly projection derived from canonical Call Records."""
 
     def __init__(
         self,
@@ -237,72 +211,6 @@ class DashboardMetricsService:
         self._lock = threading.RLock()
         self._ingest_failed = False
         self._stale_reason: str | None = None
-
-    @staticmethod
-    def _normalize_persisted(value: object) -> dict[str, Any]:
-        data = copy.deepcopy(value) if isinstance(value, dict) else {}
-        if not isinstance(data.get("days"), dict):
-            data["days"] = {}
-        if not isinstance(data.get("ingest"), dict):
-            data["ingest"] = {}
-        return data
-
-    def _load_persisted(self) -> dict[str, Any]:
-        return self._normalize_persisted(self.repository.load().data)
-
-    @staticmethod
-    def _prepare_save(data: dict[str, Any]) -> dict[str, Any]:
-        data["retention_days"] = DASHBOARD_METRICS_RETENTION_DAYS
-        data["updated_at"] = beijing_now().isoformat(timespec="seconds")
-        return data
-
-    def _save(self, data: dict[str, Any]) -> None:
-        self.repository.replace(self._prepare_save(data))
-
-    @staticmethod
-    def _ingest_state(data: dict[str, Any]) -> dict[str, Any]:
-        ingest = data.get("ingest")
-        if not isinstance(ingest, dict):
-            ingest = {}
-            data["ingest"] = ingest
-        return ingest
-
-    @classmethod
-    def _set_ingest_state(
-        cls,
-        data: dict[str, Any],
-        *,
-        status: str,
-        stale: bool,
-        reason: str | None,
-        checkpoint_at: str | None = None,
-    ) -> dict[str, Any]:
-        ingest = cls._ingest_state(data)
-        ingest["mode"] = "call_record_sequence"
-        ingest["status"] = status
-        ingest["stale"] = bool(stale)
-        ingest["failure_reason"] = reason
-        if checkpoint_at is not None:
-            ingest["checkpoint_at"] = checkpoint_at
-        return ingest
-
-    @staticmethod
-    def _prune(data: dict[str, Any], now: datetime | None = None) -> bool:
-        current = (now or _beijing_now_naive()).date()
-        cutoff = current - timedelta(days=DASHBOARD_METRICS_RETENTION_DAYS - 1)
-        days = data.get("days") if isinstance(data.get("days"), dict) else {}
-        changed = False
-        for day in list(days.keys()):
-            try:
-                parsed = datetime.strptime(str(day), "%Y-%m-%d").date()
-            except ValueError:
-                days.pop(day, None)
-                changed = True
-                continue
-            if parsed < cutoff or parsed > current:
-                days.pop(day, None)
-                changed = True
-        return changed
 
     def reset_projection_schema_if_needed(self) -> bool:
         """Reset stale physical projection tables without touching Call Records."""
@@ -324,228 +232,8 @@ class DashboardMetricsService:
             return None
         if not generation or sequence < 0:
             return None
-        return {
-            "generation": generation,
-            "sequence": sequence,
-        }
+        return {"generation": generation, "sequence": sequence}
 
-    def _reset_runtime_ingest_locked(self) -> None:
-        self._ingest_failed = False
-        self._stale_reason = None
-
-    def _build_log_window_locked(
-        self,
-        items: Iterable[dict[str, Any]],
-        end_cursor: dict[str, Any] | None,
-    ) -> tuple[dict[str, Any], int]:
-        rebuilt = _empty_metrics_data()
-        current_date = _beijing_now_naive().date()
-        cutoff = current_date - timedelta(days=DASHBOARD_METRICS_RETENTION_DAYS - 1)
-        last_event_id: str | None = None
-        last_event_at: str | None = None
-        record_count = 0
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            call_id = _clean_text(item.get("id"))
-            if call_id:
-                last_event_id = call_id
-            event_dt = _parse_log_time(_call_event_at(item))
-            if event_dt is not None:
-                last_event_at = event_dt.isoformat(timespec="seconds")
-            bucket_dt = _parse_log_time(_call_started_at(item))
-            if (
-                bucket_dt is None
-                or bucket_dt.date() < cutoff
-                or bucket_dt.date() > current_date
-            ):
-                continue
-            self._apply_call_to_data(rebuilt, item, bucket_dt)
-            record_count += 1
-
-        self._prune(rebuilt)
-        now = beijing_now().isoformat(timespec="seconds")
-        ingest = self._set_ingest_state(
-            rebuilt,
-            status="ready",
-            stale=False,
-            reason=None,
-            checkpoint_at=now,
-        )
-        ingest["initialized"] = True
-        ingest["records"] = record_count
-        ingest["last_event_id"] = last_event_id
-        ingest["last_event_at"] = last_event_at
-        ingest["last_sync_at"] = now
-        ingest["last_sync_records"] = record_count
-        ingest["log_cursor"] = self._normalize_log_cursor(end_cursor)
-        return rebuilt, record_count
-
-    def _apply_log_window_locked(
-        self,
-        data: dict[str, Any],
-        items: Iterable[dict[str, Any]],
-        end_cursor: dict[str, Any] | None,
-    ) -> int:
-        delta = _empty_metrics_data()
-        current_date = _beijing_now_naive().date()
-        cutoff = current_date - timedelta(days=DASHBOARD_METRICS_RETENTION_DAYS - 1)
-        last_event_id: str | None = None
-        last_event_at: str | None = None
-        record_count = 0
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            call_id = _clean_text(item.get("id"))
-            if call_id:
-                last_event_id = call_id
-            event_dt = _parse_log_time(_call_event_at(item))
-            if event_dt is not None:
-                last_event_at = event_dt.isoformat(timespec="seconds")
-            bucket_dt = _parse_log_time(_call_started_at(item))
-            if (
-                bucket_dt is None
-                or bucket_dt.date() < cutoff
-                or bucket_dt.date() > current_date
-            ):
-                continue
-            self._apply_call_to_data(delta, item, bucket_dt)
-            record_count += 1
-
-        _merge_metrics_data(data, delta)
-        self._prune(data)
-        now = beijing_now().isoformat(timespec="seconds")
-        ingest = self._set_ingest_state(
-            data,
-            status="ready",
-            stale=False,
-            reason=None,
-            checkpoint_at=now,
-        )
-        ingest["initialized"] = True
-        if last_event_id is not None:
-            ingest["last_event_id"] = last_event_id
-        if last_event_at is not None:
-            ingest["last_event_at"] = last_event_at
-        ingest["records"] = int(ingest.get("records", 0) or 0) + record_count
-        ingest["last_sync_at"] = now
-        ingest["last_sync_records"] = record_count
-        ingest["log_cursor"] = self._normalize_log_cursor(end_cursor)
-        return record_count
-
-    def sync_from_log_service(self, log_source: Any) -> bool:
-        """Synchronize one stable Call Record sequence window exactly once.
-
-        A missing, stale, or mismatched cursor triggers a full rebuild. The
-        aggregate and its end cursor are committed only while that captured log
-        boundary still holds, so destructive rewrites cannot publish a mixed
-        snapshot as ready.
-        """
-        from services.log_service import LogCursorMismatch
-
-        with self._lock:
-            try:
-                for attempt in range(3):
-                    rebuilt = False
-                    record_count = 0
-                    unchanged = False
-                    try:
-                        def synchronize(current: dict[str, Any] | None) -> dict[str, Any]:
-                            nonlocal rebuilt, record_count, unchanged
-                            data = self._normalize_persisted(current)
-                            ingest = self._ingest_state(data)
-                            cursor = self._normalize_log_cursor(ingest.get("log_cursor"))
-                            checkpoint_ready = (
-                                ingest.get("initialized") is True
-                                and ingest.get("status") == "ready"
-                                and ingest.get("stale") is not True
-                                and not _clean_text(ingest.get("failure_reason"))
-                                and cursor is not None
-                                and not self._ingest_failed
-                            )
-
-                            if checkpoint_ready:
-                                try:
-                                    with log_source.open_call_window(cursor) as (items, end_cursor):
-                                        if self._normalize_log_cursor(end_cursor) == cursor:
-                                            with log_source.hold_call_cursor(end_cursor):
-                                                unchanged = True
-                                                return data
-                                        record_count = self._apply_log_window_locked(
-                                            data,
-                                            items,
-                                            end_cursor,
-                                        )
-                                except LogCursorMismatch:
-                                    checkpoint_ready = False
-
-                            if not checkpoint_ready:
-                                rebuilt = True
-                                with log_source.open_call_window(None) as (items, end_cursor):
-                                    data, record_count = self._build_log_window_locked(
-                                        items,
-                                        end_cursor,
-                                    )
-
-                            with log_source.hold_call_cursor(end_cursor):
-                                return self._prepare_save(data)
-
-                        self.repository.update(synchronize)
-                        if unchanged:
-                            self._reset_runtime_ingest_locked()
-                            return False
-                        break
-                    except LogCursorMismatch:
-                        if attempt >= 2:
-                            raise
-            except Exception:
-                self._ingest_failed = True
-                self._stale_reason = "log_cursor_sync_failed"
-                try:
-                    self.mark_ingest_failed(self._stale_reason)
-                except Exception:
-                    pass
-                raise
-
-            self._reset_runtime_ingest_locked()
-            logger.info({
-                "event": "dashboard_metrics_log_cursor_synced",
-                "mode": "rebuild" if rebuilt else "incremental",
-                "records": record_count,
-            })
-            return rebuilt
-
-    def sync_from_logs(self, items: Iterable[dict[str, Any]]) -> bool:
-        """Full rebuild helper for migrations and deterministic tests."""
-        with self._lock:
-            rebuilt, record_count = self._build_log_window_locked(items, None)
-            self._save(rebuilt)
-            self._reset_runtime_ingest_locked()
-            logger.info({
-                "event": "dashboard_metrics_synced",
-                "records": record_count,
-            })
-            return True
-    def mark_ingest_failed(self, reason: str = "ingest_failed") -> None:
-        """Persist a stale marker so the next sync must rebuild from canonical logs."""
-        with self._lock:
-            self._ingest_failed = True
-            self._stale_reason = _clean_text(reason) or "ingest_failed"
-            try:
-                def mark_failed(current: dict[str, Any] | None) -> dict[str, Any]:
-                    data = self._normalize_persisted(current)
-                    ingest = self._set_ingest_state(
-                        data,
-                        status="degraded",
-                        stale=True,
-                        reason=self._stale_reason,
-                    )
-                    ingest["ingest_failed_at"] = beijing_now().isoformat(timespec="seconds")
-                    return self._prepare_save(data)
-
-                self.repository.update(mark_failed)
-            except Exception as exc:
-                logger.error({"event": "dashboard_metrics_ingest_marker_failed", "error": str(exc)})
     @staticmethod
     def _apply_call(bucket: dict[str, Any], item: dict[str, Any]) -> None:
         model = _clean_text(_detail_value(item, "model"))
@@ -586,6 +274,223 @@ class DashboardMetricsService:
                 totals[model] = float(totals.get(model, 0.0) or 0.0) + duration_ms
                 counts[model] = int(counts.get(model, 0) or 0) + 1
 
+    @classmethod
+    def _aggregate_items(
+        cls,
+        items: Iterable[dict[str, Any]],
+        *,
+        now: datetime,
+    ) -> tuple[dict[str, dict[str, Any]], int, str | None, str | None]:
+        buckets: dict[str, dict[str, Any]] = {}
+        cutoff = _retention_start(now)
+        last_event_id: str | None = None
+        last_event_at: str | None = None
+        record_count = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            call_id = _clean_text(item.get("id"))
+            if call_id:
+                last_event_id = call_id
+            event_dt = _parse_log_time(_call_event_at(item))
+            if event_dt is not None:
+                last_event_at = event_dt.isoformat(timespec="seconds")
+            bucket_dt = _parse_log_time(_call_started_at(item))
+            if bucket_dt is None or bucket_dt < cutoff or bucket_dt > now:
+                continue
+            bucket_start = bucket_dt.strftime("%Y-%m-%dT%H")
+            cls._apply_call(buckets.setdefault(bucket_start, _empty_bucket()), item)
+            record_count += 1
+        return buckets, record_count, last_event_id, last_event_at
+
+    @staticmethod
+    def _next_state(
+        current: DashboardMetricsState | None,
+        *,
+        end_cursor: dict[str, Any],
+        last_event_id: str | None,
+        last_event_at: str | None,
+        checkpoint_at: str,
+        full_rebuild: bool,
+    ) -> DashboardMetricsState:
+        previous = current or DashboardMetricsState()
+        return DashboardMetricsState(
+            call_record_generation=str(end_cursor["generation"]),
+            last_sequence=int(end_cursor["sequence"]),
+            status="ready",
+            failure_reason=None,
+            last_event_id=(
+                last_event_id
+                if full_rebuild or last_event_id is not None
+                else previous.last_event_id
+            ),
+            last_event_at=(
+                last_event_at
+                if full_rebuild or last_event_at is not None
+                else previous.last_event_at
+            ),
+            checkpoint_at=checkpoint_at,
+            retention_cutoff=previous.retention_cutoff,
+            revision=previous.revision,
+        )
+
+    def _reset_runtime_ingest_locked(self) -> None:
+        self._ingest_failed = False
+        self._stale_reason = None
+
+    def sync_from_log_service(self, log_source: Any) -> bool:
+        """Process only new Call Records, rebuilding after destructive changes."""
+        from services.log_service import LogCursorMismatch
+
+        with self._lock:
+            force_rebuild = False
+            try:
+                for attempt in range(3):
+                    state = self.repository.load_state()
+                    expected_revision = state.revision if state is not None else 0
+                    checkpoint_ready = (
+                        not force_rebuild
+                        and state is not None
+                        and state.ready
+                        and not state.failure_reason
+                        and not self._ingest_failed
+                    )
+                    now = _beijing_now_naive()
+                    cutoff_bucket = _retention_cutoff(now)
+                    try:
+                        if checkpoint_ready:
+                            cursor = state.cursor
+                            if cursor is None:
+                                force_rebuild = True
+                                continue
+                            with log_source.open_call_window(cursor) as (items, raw_end_cursor):
+                                end_cursor = self._normalize_log_cursor(raw_end_cursor)
+                                if end_cursor is None:
+                                    raise LogCursorMismatch("call record cursor is invalid")
+                                unchanged = end_cursor == cursor
+                                if unchanged:
+                                    buckets: dict[str, dict[str, Any]] = {}
+                                    record_count = 0
+                                    next_state = state
+                                else:
+                                    (
+                                        buckets,
+                                        record_count,
+                                        last_event_id,
+                                        last_event_at,
+                                    ) = self._aggregate_items(items, now=now)
+                                    next_state = self._next_state(
+                                        state,
+                                        end_cursor=end_cursor,
+                                        last_event_id=last_event_id,
+                                        last_event_at=last_event_at,
+                                        checkpoint_at=beijing_now().isoformat(timespec="seconds"),
+                                        full_rebuild=False,
+                                    )
+                            self.repository.apply_increment(
+                                expected_revision=expected_revision,
+                                next_state=next_state,
+                                buckets=buckets,
+                                cutoff_bucket=cutoff_bucket,
+                                source_cursor=end_cursor,
+                            )
+                            rebuilt = False
+                        else:
+                            with log_source.open_call_window(None) as (items, raw_end_cursor):
+                                end_cursor = self._normalize_log_cursor(raw_end_cursor)
+                                if end_cursor is None:
+                                    raise LogCursorMismatch("call record cursor is invalid")
+                                (
+                                    buckets,
+                                    record_count,
+                                    last_event_id,
+                                    last_event_at,
+                                ) = self._aggregate_items(items, now=now)
+                            next_state = self._next_state(
+                                state,
+                                end_cursor=end_cursor,
+                                last_event_id=last_event_id,
+                                last_event_at=last_event_at,
+                                checkpoint_at=beijing_now().isoformat(timespec="seconds"),
+                                full_rebuild=True,
+                            )
+                            self.repository.replace_projection(
+                                expected_revision=expected_revision,
+                                next_state=next_state,
+                                buckets=buckets,
+                                cutoff_bucket=cutoff_bucket,
+                                source_cursor=end_cursor,
+                            )
+                            rebuilt = True
+
+                        self._reset_runtime_ingest_locked()
+                        logger.info({
+                            "event": "dashboard_metrics_log_cursor_synced",
+                            "mode": "rebuild" if rebuilt else "incremental",
+                            "records": record_count,
+                        })
+                        return rebuilt
+                    except DashboardMetricsWriteConflict:
+                        if attempt >= 2:
+                            raise
+                    except (LogCursorMismatch, DashboardMetricsSourceChanged):
+                        force_rebuild = True
+                        if attempt >= 2:
+                            raise
+                raise RuntimeError("dashboard metrics synchronization did not converge")
+            except Exception:
+                self._ingest_failed = True
+                self._stale_reason = "log_cursor_sync_failed"
+                try:
+                    self.repository.mark_degraded(self._stale_reason)
+                except Exception:
+                    pass
+                raise
+
+    def sync_from_logs(self, items: Iterable[dict[str, Any]]) -> bool:
+        """Replace the projection from an explicit deterministic Call Record set."""
+        with self._lock:
+            now = _beijing_now_naive()
+            buckets, record_count, last_event_id, last_event_at = self._aggregate_items(
+                items,
+                now=now,
+            )
+            state = self.repository.load_state()
+            expected_revision = state.revision if state is not None else 0
+            checkpoint_at = beijing_now().isoformat(timespec="seconds")
+            next_state = DashboardMetricsState(
+                call_record_generation="explicit_snapshot",
+                last_sequence=0,
+                status="ready",
+                last_event_id=last_event_id,
+                last_event_at=last_event_at,
+                checkpoint_at=checkpoint_at,
+                revision=expected_revision,
+            )
+            self.repository.replace_projection(
+                expected_revision=expected_revision,
+                next_state=next_state,
+                buckets=buckets,
+                cutoff_bucket=_retention_cutoff(now),
+                source_cursor=None,
+            )
+            self._reset_runtime_ingest_locked()
+            logger.info({"event": "dashboard_metrics_synced", "records": record_count})
+            return True
+
+    def mark_ingest_failed(self, reason: str = "ingest_failed") -> None:
+        """Persist a stale marker so the next synchronization performs a rebuild."""
+        with self._lock:
+            self._ingest_failed = True
+            self._stale_reason = _clean_text(reason) or "ingest_failed"
+            try:
+                self.repository.mark_degraded(self._stale_reason)
+            except Exception as exc:
+                logger.error({
+                    "event": "dashboard_metrics_ingest_marker_failed",
+                    "error": str(exc),
+                })
+
     def refresh_worker(
         self,
         log_source: Any,
@@ -619,56 +524,45 @@ class DashboardMetricsService:
         thread.start()
         return thread
 
-    @classmethod
-    def _apply_call_to_data(cls, data: dict[str, Any], item: dict[str, Any], dt: datetime) -> None:
-        days = data.setdefault("days", {})
-        day_key = dt.strftime("%Y-%m-%d")
-        hour_key = dt.strftime("%H")
-        day = days.setdefault(day_key, _empty_bucket())
-        hours = day.setdefault("hours", {})
-        hour = hours.setdefault(hour_key, _empty_bucket())
-        cls._apply_call(day, item)
-        cls._apply_call(hour, item)
-
-    def _snapshot_data(self) -> dict[str, Any]:
+    def _snapshot_data(self) -> tuple[DashboardMetricsState | None, dict[str, Any]]:
         with self._lock:
-            data = self._load_persisted()
-            self._prune(data)
-            if self._ingest_failed:
-                self._set_ingest_state(
-                    data,
-                    status="degraded",
-                    stale=True,
-                    reason=self._stale_reason or "ingest_failed",
-                )
-            return copy.deepcopy(data)
+            now = _beijing_now_naive()
+            snapshot = self.repository.load(_retention_cutoff(now))
+            days: dict[str, Any] = {}
+            for bucket_start, bucket in snapshot.hourly.items():
+                day_key, hour_key = bucket_start.split("T", 1)
+                days.setdefault(day_key, {"hours": {}})["hours"][hour_key] = bucket
+            return snapshot.state, days
 
-
-    @staticmethod
-    def _metrics_view(data: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-        ingest = data.get("ingest") if isinstance(data.get("ingest"), dict) else {}
-        ready = (
-            ingest.get("initialized") is True
-            and ingest.get("status") == "ready"
-            and ingest.get("stale") is not True
-        )
-        last_ingested_at = _clean_text(ingest.get("last_event_at")) or None
+    def _metrics_view(
+        self,
+        state: DashboardMetricsState | None,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        ready = bool(state and state.ready and not self._ingest_failed)
+        last_ingested_at = state.last_event_at if state is not None else None
         last_ingested_dt = _parse_log_time(last_ingested_at)
         freshness_ms = (
             max(0, int((now - last_ingested_dt).total_seconds() * 1000))
             if last_ingested_dt is not None
             else None
         )
+        failure_reason = (
+            self._stale_reason
+            if self._ingest_failed
+            else (state.failure_reason if state is not None else "uninitialized")
+        )
         return {
             "status": "ready" if ready else "degraded",
             "ready": ready,
             "stale": not ready,
             "source": "call_record_sequence",
-            "source_revision": _clean_text(ingest.get("last_event_id")) or None,
+            "source_revision": state.last_event_id if state is not None else None,
             "last_ingested_at": last_ingested_at,
             "freshness_ms": freshness_ms,
-            "checkpoint_at": _clean_text(ingest.get("checkpoint_at")) or None,
-            "failure_reason": _clean_text(ingest.get("failure_reason")) or None,
+            "checkpoint_at": state.checkpoint_at if state is not None else None,
+            "failure_reason": failure_reason,
             "retention_days": DASHBOARD_METRICS_RETENTION_DAYS,
         }
 
@@ -741,9 +635,15 @@ class DashboardMetricsService:
         model_duration_totals: dict[str, list[float]] = {}
         model_duration_counts: dict[str, list[int]] = {}
         for index, bucket in enumerate(series_buckets):
-            values = bucket.get("model_success") if isinstance(bucket.get("model_success"), dict) else {}
-            for model, count in values.items():
-                model_success_requests.setdefault(str(model), [0] * bucket_count)[index] += int(count or 0)
+            successes = (
+                bucket.get("model_success")
+                if isinstance(bucket.get("model_success"), dict)
+                else {}
+            )
+            for model, count in successes.items():
+                model_success_requests.setdefault(str(model), [0] * bucket_count)[index] += int(
+                    count or 0
+                )
             totals = (
                 bucket.get("model_success_total_times")
                 if isinstance(bucket.get("model_success_total_times"), dict)
@@ -755,9 +655,13 @@ class DashboardMetricsService:
                 else {}
             )
             for model, total in totals.items():
-                model_duration_totals.setdefault(str(model), [0.0] * bucket_count)[index] += float(total or 0.0)
+                model_duration_totals.setdefault(str(model), [0.0] * bucket_count)[index] += float(
+                    total or 0.0
+                )
             for model, count in counts.items():
-                model_duration_counts.setdefault(str(model), [0] * bucket_count)[index] += int(count or 0)
+                model_duration_counts.setdefault(str(model), [0] * bucket_count)[index] += int(
+                    count or 0
+                )
 
         model_names = sorted(
             set(model_success_requests) | set(model_duration_totals) | set(model_duration_counts),
@@ -767,21 +671,18 @@ class DashboardMetricsService:
         for model in model_names:
             duration_totals = model_duration_totals.get(model, [0.0] * bucket_count)
             duration_counts = model_duration_counts.get(model, [0] * bucket_count)
-            avg_duration_series = [
+            model_avg_success_duration_ms[model] = [
                 round(duration_totals[index] / duration_counts[index], 2)
                 if duration_counts[index] > 0
                 else None
                 for index in range(bucket_count)
             ]
-            model_avg_success_duration_ms[model] = avg_duration_series
 
         current_metrics = _bucket_metrics(total_bucket)
-        success_total = current_metrics["success_calls"]
-        final_failed_total = current_metrics["final_failed_calls"]
         totals = {
             "total": current_metrics["total_calls"],
-            "success": success_total,
-            "final_failed": final_failed_total,
+            "success": current_metrics["success_calls"],
+            "final_failed": current_metrics["final_failed_calls"],
             "success_rate": current_metrics["success_rate"],
             "avg_success_duration_ms": current_metrics["avg_success_duration_ms"],
         }
@@ -833,11 +734,10 @@ class DashboardMetricsService:
         invalid = [item for item in requested if item not in DASHBOARD_TIME_RANGES]
         if invalid:
             raise ValueError(f"Unsupported dashboard time ranges: {', '.join(invalid)}")
-        data = self._snapshot_data()
-        days = data.get("days") if isinstance(data.get("days"), dict) else {}
+        state, days = self._snapshot_data()
         now = _beijing_now_naive()
         return {
-            "metrics": self._metrics_view(data, now=now),
+            "metrics": self._metrics_view(state, now=now),
             "ranges": {
                 time_range: self._range_view(days, time_range, now=now)
                 for time_range in requested
