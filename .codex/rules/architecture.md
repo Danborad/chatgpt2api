@@ -24,7 +24,7 @@
 - **Leverage**：调用者从 Depth 获得的复用收益。
 - **Locality**：修改、知识、错误和验证集中在一个位置。
 
-使用 `CONTEXT.md` 中的领域名称，例如 Upstream Account、User Key、Image Task、Call Record、Proxy Reference 和 Account Storage Backend。不要用含混的“账号”“用户”“运行时代理”替代已经定义的概念。
+使用 `CONTEXT.md` 中的领域名称，例如 Upstream Account、User Key、Image Task、Call Record、Proxy Reference、Application Database 和 Account Repository。不要用含混的“账号”“用户”“运行时代理”或“全局 Repository”替代已经定义的概念。
 
 ## 唯一所有者
 
@@ -52,9 +52,10 @@ domain and persistence Implementation
 
 ## 持久化所有权
 
-- Account Storage Backend 只存储 Upstream Accounts 和 User Keys。
-- 配置、Call Records、指标、Image Tasks、Editable File Tasks、Image Assets 和 Prompt Library 各有独立持久化责任。
-- 不得把 `STORAGE_BACKEND` 解释为全局存储开关。
+- Application Database 是 SQLite 或 PostgreSQL 的共享物理数据库，不是一个拥有全部业务的通用 Repository。
+- Account Repository 只存储 Upstream Accounts 和 User Keys。设置、代理、Call Records、指标、Prompt Library、远程导入、协调状态和 Editable File Tasks 通过各自 Repository 使用同一个 Application Database，并保留独立 Interface 与事务边界。
+- Image Tasks、Image Assets、图库文件和实时监控状态不属于 Application Database；其所有者和持久化位置以 `CONTEXT.md`、ADR 0004 和 current 存储文档为准。
+- `DATABASE_URL` 只选择 Application Database；不得重新引入 `STORAGE_BACKEND`，也不得把数据库选择解释为全局存储开关。
 - 不得仅为“统一”迁移日志、代理、设置、图片或任务存储。改变所有权必须先分析迁移、并发、恢复、回滚和运维成本，并由用户明确授权及 ADR 记录。
 - Image Asset 变更必须经过 `ImageStorageService`，遵循 ADR 0003；调用者不得绕过其 Seam 直接改索引或文件。
 

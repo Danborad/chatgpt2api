@@ -21,6 +21,7 @@
 | 架构、契约、跨层重构、存储 | `.codex/rules/architecture.md` |
 | `api/`、`contracts/`、`services/`、`repository/`、Python 运行时 | `.codex/rules/backend.md` |
 | `web-vue/`、页面、交互、样式、Nanocat 接入 | `.codex/rules/frontend.md` |
+| 文档、PRD、架构地图、runbook、外部参考 | `.codex/rules/documentation.md` |
 | Review、测试、回归、验收 | `.codex/rules/testing-and-review.md` |
 | 暂存、提交、推送、版本、Nanocat 发布 | `.codex/rules/git-and-release.md` |
 

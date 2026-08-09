@@ -29,6 +29,8 @@ docker-compose-local.yml
 
 # Git cache
 git_cache/
+.codegraph/
+.codegraph-*/
 
 # 调试/测试输出目录
 .codex/run-logs/
