@@ -15,6 +15,20 @@ Plans describe intended work, not completed behaviour. Historical smoke records,
 old route maps, and documents for deleted features are not retained as current
 documentation.
 
+Executable documentation rules live in
+[`../.codex/rules/documentation.md`](../.codex/rules/documentation.md).
+
+## Navigation
+
+| Area | Owner and purpose |
+| --- | --- |
+| [`../CONTEXT.md`](../CONTEXT.md) | Domain terms, relationships, and ownership |
+| [`../.codex/rules/`](../.codex/rules/) | Executable AI and automation development rules |
+| [`adr/`](adr/) | Accepted architecture decisions |
+| [`requirements/`](requirements/) | PRDs, acceptance criteria, and their lifecycle |
+| [`runbooks/`](runbooks/) | Repeatable deployment, recovery, and operations procedures |
+| [`references/upstream-projects.md`](references/upstream-projects.md) | Upstream projects and tool-usage boundaries |
+
 ## Current documents
 
 | Document | Status | Purpose |
@@ -31,9 +45,11 @@ documentation.
 
 ## Documentation rules
 
-- Each new document must state whether it is `current`, `plan`, or `historical`.
+- Each current document and PRD must carry the status defined by the owning
+  documentation rule.
 - A current document only describes verified behaviour and real routes.
-- A plan must name its non-goals and acceptance criteria.
+- A PRD must name its non-goals, unique owners, Interfaces, acceptance criteria,
+  and verification evidence.
 - Removed routes and features must be removed from current documentation in the
   same change that removes them from the product.
 - Do not add generated reports, one-off smoke logs, or local experiment notes to
