@@ -29,7 +29,7 @@
     "highlight.js": "^11.11.1",
     "js-beautify": "^1.15.4",
     "markdown-it": "^14.2.0",
-    "nanocat-ui": "0.1.9",
+    "nanocat-ui": "0.1.10",
     "pinia": "^3.0.4",
     "vue": "^3.5.41",
     "vue-router": "^4.6.4",
