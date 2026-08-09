@@ -97,9 +97,11 @@ sequenceDiagram
 ```
 
 The Call Record is durable final truth. Active Requests and live operations are
-process-memory observations and may disappear on restart. Dashboard aggregates
-are synchronized from Call Records and stored independently from log-retention
-presentation.
+process-memory observations and may disappear on restart. The Dashboard Metric
+Projection reads only Call Records after its stored sequence during normal
+synchronization, updates affected hourly rows atomically, and rebuilds only when
+the Call Record generation changes. Its 30-day history remains independent of
+the shorter Call Record retention window.
 
 ## Dashboard projection
 
@@ -123,9 +125,11 @@ sequenceDiagram
 ```
 
 The backend owns metric definitions, available ranges, units, health, and
-runtime values. The page selects one returned range and owns refresh timing,
-retained snapshots, chart construction, animation, layout, and responsive
-behavior.
+runtime values. Account cards and Active Request counts read current state;
+24-hour call cards and all chart ranges come from the same 30-day hourly
+projection; runtime-environment samples are not persisted. The page selects one
+returned range and owns refresh timing, retained snapshots, chart construction,
+animation, layout, and responsive behavior.
 
 ## Managed-container online update
 

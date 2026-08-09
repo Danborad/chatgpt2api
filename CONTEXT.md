@@ -70,6 +70,10 @@ _Avoid_: Runtime event, active request
 An in-memory request lifecycle currently tracked by real-time monitoring.
 _Avoid_: Call record
 
+**Dashboard Metric Projection**:
+A rebuildable 30-day hourly aggregate derived incrementally from Call Records. It stores call outcomes, switching, successful duration, and successful per-model measurements; Dashboard cards and runtime-environment samples are views, not additional durable copies.
+_Avoid_: Dashboard cache, card table, runtime snapshot table
+
 **Proxy Group**:
 A named set of proxy nodes and a selection strategy that can be referenced by accounts or defaults.
 _Avoid_: Account group, proxy profile
@@ -113,6 +117,7 @@ _Avoid_: A global repository for settings, logs, images, and task state
 - An **Editable File Task** publishes one primary **Editable File Asset** and one ZIP **Editable File Asset** when it succeeds; asset reads do not depend on retaining the task record.
 - An image call contains one or more **Image Attempts**; an **Account Switch** links consecutive attempts but is not itself a terminal result.
 - A completed public invocation produces one **Call Record**, while an **Active Request** exists only during the live request window.
+- A **Dashboard Metric Projection** advances from the last processed **Call Record** sequence and retains only hourly aggregates; destructive Call Record changes invalidate its cursor and trigger a rebuild.
 - An **Upstream Account** can reference one **Proxy Reference**, which may select one **Proxy Group**.
 - The default egress is exactly one **Proxy Reference**; **Proxy Session** behavior cannot replace it.
 - Multiple **Prompt Sources** contribute items to one **Prompt Library**.

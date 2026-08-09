@@ -30,7 +30,7 @@ second implementation of service state transitions.
 | Proxy routing | `ProxyManagementService`, `ProxyService` | Proxy References, groups, tests, and runtime view | `ProxyConfigurationRepository` |
 | Call Records | `LoggedCall`, `CallRecordService` | Call summary/detail projections | `CallRecordRepository` |
 | Active Requests and live operations | `RealtimeMonitorService` | Snapshot and call-detail records | Process memory |
-| Dashboard aggregates | `DashboardMetricsService` | Multi-range metric snapshots | `DashboardMetricsRepository` |
+| Dashboard Metric Projection | `DashboardMetricsService` | 24-hour cards and 24h / 7d / 30d chart snapshots from one hourly projection | `DashboardMetricsRepository` with state, hourly, and per-model hourly tables |
 | Runtime environment | `runtime_environment_service` | One runtime snapshot | No durable state |
 | Image Tasks | `ImageTaskService` | Owner-scoped task projection and terminal result | `data/image_tasks.json` |
 | Image Assets and gallery | `ImageStorageService` | Asset mutation, catalogue, storage, and public URL behavior | Local/WebDAV assets plus `data/image_index.json` |
