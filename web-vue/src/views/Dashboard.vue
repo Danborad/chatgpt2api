@@ -138,29 +138,43 @@
         </template>
         <div class="flex h-56 items-center px-1">
           <div class="mx-auto flex w-full flex-col gap-4" :style="{ maxWidth: activityGridMaxWidth }">
-            <TransitionGroup
-              name="dashboard-activity-cell"
-              tag="div"
-              appear
+            <div
+              :key="`${activityAnimationEpoch}-${activityTimeRange}`"
               class="grid gap-1.5"
               :style="{ gridTemplateColumns: `repeat(${activityColumnCount}, minmax(0, 1fr))` }"
             >
               <span
                 v-for="(bucket, index) in activityBuckets"
-                :key="`${activityTimeRange}-${bucket.start_at}`"
+                :key="`${activityAnimationEpoch}-${activityTimeRange}-${bucket.start_at}`"
                 class="dashboard-activity-cell grid min-w-0"
-                :style="{ transitionDelay: `${Math.min(index * 16, 240)}ms` }"
+                :style="{ animationDelay: `${Math.min(index * 2, 32)}ms` }"
               >
-                <Tooltip :text="activityTooltip(bucket)" placement="top" :offset="6">
+                <HoverCard card-class="w-52" :offset="8" focusable>
                   <span
                     class="dashboard-activity-cell-trigger block aspect-square w-full min-w-0 rounded-[3px] border border-transparent transition-[background-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-sm"
                     :class="activityCellClass(bucket.total_calls)"
                     role="img"
                     :aria-label="activityTooltip(bucket)"
                   ></span>
-                </Tooltip>
+                  <template #content>
+                    <div class="mb-2 text-xs font-semibold text-foreground">{{ bucket.label }}</div>
+                    <div class="grid gap-1.5 text-xs">
+                      <div
+                        v-for="item in activityTooltipItems(bucket)"
+                        :key="item.label"
+                        class="flex items-center justify-between gap-4"
+                      >
+                        <span class="inline-flex items-center gap-1.5 text-muted-foreground">
+                          <span class="h-2 w-2 rounded-full" :class="item.markerClass"></span>
+                          {{ item.label }}
+                        </span>
+                        <span class="font-semibold text-foreground">{{ item.value }}</span>
+                      </div>
+                    </div>
+                  </template>
+                </HoverCard>
               </span>
-            </TransitionGroup>
+            </div>
             <div class="flex items-center justify-between text-[11px] text-muted-foreground">
               <span>{{ activityBuckets[0]?.label || '--' }}</span>
               <span class="flex items-center gap-1.5">
@@ -199,7 +213,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Button, ChartCard, StatCard, Tooltip } from 'nanocat-ui'
+import { Button, ChartCard, HoverCard, StatCard } from 'nanocat-ui'
 import { Icon } from '@iconify/vue'
 import PageLoadingState from '@/components/ai/PageLoadingState.vue'
 import PagePanel from '@/components/ai/PagePanel.vue'
@@ -225,6 +239,7 @@ const {
   modelTimeRange,
   trendTimeRange,
   activityTimeRange,
+  activityAnimationEpoch,
   responseTimeTimeRange,
   modelResponseTimeTimeRange,
   activityBuckets,
@@ -289,7 +304,7 @@ const activityColumnCount = computed(() => {
 })
 const activityGridMaxWidth = computed(() => {
   const columnCount = activityColumnCount.value
-  const cellWidthRem = 3.5
+  const cellWidthRem = activityTimeRange.value === '7d' ? 5.5 : 3.5
   const gapWidthRem = 0.375
   return `${columnCount * cellWidthRem + (columnCount - 1) * gapWidthRem}rem`
 })
@@ -455,28 +470,51 @@ function activityTooltip(bucket: DashboardBucket) {
   return `${bucket.label} · 调用 ${formatCount(bucket.total_calls)} · 成功 ${formatCount(bucket.success_calls)} · 失败 ${formatCount(bucket.final_failed_calls)} · 成功率 ${formatPercent(bucket.success_rate)}`
 }
 
+function activityTooltipItems(bucket: DashboardBucket) {
+  return [
+    {
+      label: '调用',
+      value: formatCount(bucket.total_calls),
+      markerClass: 'bg-slate-500 dark:bg-slate-400',
+    },
+    {
+      label: '成功',
+      value: formatCount(bucket.success_calls),
+      markerClass: 'bg-emerald-500',
+    },
+    {
+      label: '失败',
+      value: formatCount(bucket.final_failed_calls),
+      markerClass: 'bg-rose-500',
+    },
+    {
+      label: '成功率',
+      value: formatPercent(bucket.success_rate),
+      markerClass: 'bg-amber-500',
+    },
+  ]
+}
+
 </script>
 
 <style scoped>
-.dashboard-activity-cell-enter-active {
-  transition:
-    opacity 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+.dashboard-activity-cell {
+  animation: dashboard-activity-cell-enter 180ms ease-out both;
 }
 
-.dashboard-activity-cell-enter-from {
-  opacity: 0;
-  transform: translateY(6px) scale(0.82);
-}
-
-.dashboard-activity-cell-enter-to {
-  opacity: 1;
-  transform: translateY(0) scale(1);
+@keyframes dashboard-activity-cell-enter {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dashboard-activity-cell-enter-active,
+  .dashboard-activity-cell,
   .dashboard-activity-cell-trigger {
+    animation: none;
     transition: none;
   }
 

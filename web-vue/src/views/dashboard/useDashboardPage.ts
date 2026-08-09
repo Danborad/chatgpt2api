@@ -120,6 +120,12 @@ function resolveDashboardBarMaxWidth(pointCount: number) {
   return 36
 }
 
+function prefersReducedDashboardMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 
 export function useDashboardPage() {
   type ChartInstance = {
@@ -131,7 +137,7 @@ export function useDashboardPage() {
     dispose: () => void
     clear?: () => void
   }
-  type RenderMode = 'initial' | 'range' | 'refresh'
+  type RenderMode = 'initial' | 'entry' | 'range' | 'refresh'
   const pageRuntime = usePageRuntime('dashboard')
   const DASHBOARD_DATA_REQUEST_KEY = 'dashboard:data'
   const CHART_BOOTSTRAP_TIMER_KEY = 'dashboard:chart-bootstrap'
@@ -150,6 +156,7 @@ export function useDashboardPage() {
   const modelTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
   const trendTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
   const activityTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+  const activityAnimationEpoch = ref(0)
   const responseTimeTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
   const modelResponseTimeTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
 
@@ -280,6 +287,7 @@ export function useDashboardPage() {
     lazyUpdate: boolean
   }> = {
     initial: { duration: 860, updateDuration: 620, delayStep: 14, lazyUpdate: false },
+    entry: { duration: 560, updateDuration: 460, delayStep: 8, lazyUpdate: false },
     range: { duration: 560, updateDuration: 460, delayStep: 8, lazyUpdate: false },
     refresh: { duration: 260, updateDuration: 220, delayStep: 0, lazyUpdate: true },
   }
@@ -357,11 +365,12 @@ export function useDashboardPage() {
       animationDelay: profile.delayStep > 0 ? (idx: number) => Math.min(idx * profile.delayStep, 180) : 0,
       animationDelayUpdate: profile.delayStep > 0 ? (idx: number) => Math.min(idx * Math.max(4, Math.floor(profile.delayStep / 2)), 120) : 0,
     }
-    if (activeMode === 'range') {
+    const resetsSeries = activeMode === 'entry' || activeMode === 'range'
+    if (resetsSeries) {
       chart.clear?.()
     }
     chart.setOption(optionWithAnimation, {
-      notMerge: activeMode === 'range',
+      notMerge: resetsSeries,
       lazyUpdate: profile.lazyUpdate,
       replaceMerge: ['series', 'xAxis', 'yAxis', 'legend', 'graphic', 'grid'],
     })
@@ -444,20 +453,24 @@ export function useDashboardPage() {
   })
 
   let applyDefaultTimeRangeWhenShown = false
+  let replayEntryAnimationWhenShown = false
 
-  pageRuntime.onActivate(({ visible }) => {
+  pageRuntime.onActivate(({ initial, visible }) => {
     if (!visible) {
       applyDefaultTimeRangeWhenShown = true
+      replayEntryAnimationWhenShown = !initial
       return
     }
     applyDefaultTimeRangeWhenShown = false
+    replayEntryAnimationWhenShown = false
     applyDashboardDefaultTimeRange()
     bindResizeListener()
-    void reloadDashboardOnEnter()
+    void reloadDashboardOnEnter({ replay: !initial })
   })
 
   pageRuntime.onDeactivate(() => {
     applyDefaultTimeRangeWhenShown = false
+    replayEntryAnimationWhenShown = false
     dashboardPolling.stop()
     unbindResizeListener()
     dashboardEntrySeq += 1
@@ -474,12 +487,14 @@ export function useDashboardPage() {
   })
 
   pageRuntime.onShow(() => {
+    const replay = replayEntryAnimationWhenShown
+    replayEntryAnimationWhenShown = false
     if (applyDefaultTimeRangeWhenShown) {
       applyDefaultTimeRangeWhenShown = false
       applyDashboardDefaultTimeRange()
     }
     bindResizeListener()
-    void reloadDashboardOnEnter()
+    void reloadDashboardOnEnter({ replay })
   })
 
   onBeforeUnmount(() => {
@@ -807,7 +822,7 @@ export function useDashboardPage() {
     updateModelChart(mode)
   }
 
-  async function refreshDashboardData(options: { silent?: boolean } = {}) {
+  async function refreshDashboardData(options: { silent?: boolean; replay?: boolean } = {}) {
     const epoch = dashboardRefreshEpoch
 
     if (dashboardRefreshInFlight?.epoch === epoch) {
@@ -827,8 +842,17 @@ export function useDashboardPage() {
           const changed = applyDashboardSnapshot(snapshot)
           dashboardLoadError.value = ''
           dashboardDataReady.value = true
-          if (changed && wasReady && chartsBootstrapped.value) {
-            updateDashboardCharts()
+          const shouldReplay = Boolean(
+            options.replay
+            && wasReady
+            && chartsBootstrapped.value
+            && !prefersReducedDashboardMotion(),
+          )
+          if (shouldReplay) {
+            activityAnimationEpoch.value += 1
+          }
+          if ((changed || shouldReplay) && wasReady && chartsBootstrapped.value) {
+            updateDashboardCharts(shouldReplay ? 'entry' : 'refresh')
           }
           if (!wasReady || !chartsBootstrapped.value) {
             void nextTick().then(() => {
@@ -859,7 +883,7 @@ export function useDashboardPage() {
     dashboardRefreshInFlight = { epoch, promise: refreshPromise, controller }
     return refreshPromise
   }
-  async function reloadDashboardOnEnter() {
+  async function reloadDashboardOnEnter(options: { replay?: boolean } = {}) {
     const entrySeq = ++dashboardEntrySeq
     dashboardPolling.stop()
     cancelDashboardDataRequests()
@@ -877,7 +901,10 @@ export function useDashboardPage() {
       requestAnimationFrame(handleResize)
     }
     dashboardPolling.start()
-    await refreshDashboardData({ silent: hasSnapshot })
+    await refreshDashboardData({
+      silent: hasSnapshot,
+      replay: hasSnapshot && options.replay,
+    })
   }
 
   function retryDashboard() {
@@ -1017,6 +1044,7 @@ export function useDashboardPage() {
     modelTimeRange,
     trendTimeRange,
     activityTimeRange,
+    activityAnimationEpoch,
     responseTimeTimeRange,
     modelResponseTimeTimeRange,
     activityBuckets,
