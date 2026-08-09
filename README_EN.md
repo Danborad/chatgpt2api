@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white" alt="Vue 3" />
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker ready" />
-  <img src="https://img.shields.io/badge/License-CNC--1.0-red" alt="License CNC-1.0" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="License AGPL-3.0" /></a>
 </p>
 
 <p align="center">
@@ -231,6 +231,12 @@ The frontend development server defaults to `http://localhost:5173`, with backen
 | [Upstream SSE](./docs/upstream-sse-conversation.md) | Conversation and stream-parsing boundaries |
 
 If documentation conflicts with the implementation, the current code, tests, and public API contracts are authoritative.
+
+## License
+
+The current repository is distributed under the [GNU Affero General Public License v3.0](./LICENSE) (`AGPL-3.0-only`). If you modify the software and make it available over a network, you must offer the corresponding source code to users of that service as required by the license.
+
+Code derived from [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) retains its original MIT copyright and license notice; see [NOTICE](./NOTICE). Versions previously released under MIT remain available under their original license.
 
 ## Project Contributors
 

@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white" alt="Vue 3" />
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker ready" />
-  <img src="https://img.shields.io/badge/License-CNC--1.0-red" alt="License CNC-1.0" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="License AGPL-3.0" /></a>
 </p>
 
 <p align="center">
@@ -231,6 +231,12 @@ npm run dev
 | [上游 SSE](./docs/upstream-sse-conversation.md)    | 会话与流式解析边界                   |
 
 文档与实现冲突时，以当前代码、测试和公开接口契约为准。
+
+## 许可证
+
+本仓库当前版本以 [GNU Affero General Public License v3.0](./LICENSE)（`AGPL-3.0-only`）发布。修改后通过网络提供服务时，须按协议向服务用户提供对应源码。
+
+源自 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 的代码继续保留原 MIT 版权与许可声明，详见 [NOTICE](./NOTICE)。此前已按 MIT 发布的版本仍适用其原许可证。
 
 ## 本项目贡献者
 
