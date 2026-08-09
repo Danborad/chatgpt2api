@@ -1,12 +1,11 @@
-import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { statsApi } from '@/api/stats'
 import type {
   DashboardAccountStats,
-  DashboardBucket,
   DashboardRangeStats,
   DashboardResponse,
 } from '@/types/api'
-import { usePageQuery, useVisibilityPolling } from '@/composables/usePageQuery'
+import { usePageQuery, useSerialVisibilityPolling } from '@/composables/usePageQuery'
 import { usePageRuntime } from '@/composables/usePageRuntime'
 import {
   getLineChartTheme,
@@ -14,11 +13,61 @@ import {
   chartColors,
   getModelColor,
 } from '@/lib/chartTheme'
-import { DEFAULT_DASHBOARD_TIME_RANGE, type DashboardTimeRange } from '@/lib/timeRanges'
+import type { DashboardTimeRange } from '@/lib/timeRanges'
 import { buildDashboardTrendSeries } from '@/views/dashboard/dashboardTrendSeries'
+import {
+  readDashboardDefaultTimeRange,
+  readDashboardRefreshIntervalSeconds,
+} from '@/views/dashboard/dashboardPreferences'
 
 const SUCCESS_RATE_DEMO_VALUES = [92, 94, 91, 96, 95, 97, 96, 98]
 const SUCCESS_DURATION_DEMO_SECONDS = [48, 54, 46, 59, 52, 49, 56, 51]
+const DASHBOARD_TOOLTIP_HTML_ESCAPE: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}
+
+type DashboardTooltipItem = {
+  axisValue?: unknown
+  marker?: string
+  seriesName?: unknown
+  value?: unknown
+}
+
+function escapeDashboardTooltipText(value: unknown) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => (
+    DASHBOARD_TOOLTIP_HTML_ESCAPE[character]
+  ))
+}
+
+function formatDashboardAxisTooltip(
+  rawParams: unknown,
+  formatValue: (value: number, item: DashboardTooltipItem) => string,
+) {
+  if (!Array.isArray(rawParams)) return ''
+  const params = rawParams.filter((item): item is DashboardTooltipItem => (
+    Boolean(item) && typeof item === 'object'
+  ))
+  if (!params.length) return ''
+
+  let result = `<div style="font-weight: 600; margin-bottom: 4px;">${escapeDashboardTooltipText(params[0].axisValue)}</div>`
+  params.forEach((item) => {
+    if (item.value === null || item.value === undefined) return
+    const numericValue = Number(item.value)
+    if (!Number.isFinite(numericValue)) return
+    const marker = typeof item.marker === 'string' ? item.marker : ''
+    const seriesName = escapeDashboardTooltipText(item.seriesName)
+    const value = escapeDashboardTooltipText(formatValue(numericValue, item))
+    result += `<div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
+      <span>${marker}${marker ? ' ' : ''}${seriesName}</span>
+      <span style="font-weight: 600;">${value}</span>
+    </div>`
+  })
+  return result
+}
 
 function resampleDemoValues(values: number[], pointCount: number) {
   if (pointCount <= 0) return []
@@ -81,16 +130,12 @@ export function useDashboardPage() {
     resize: () => void
     dispose: () => void
     clear?: () => void
-    off?: (eventName: string) => void
-    on?: (eventName: string, handler: (params: any) => void) => void
-    dispatchAction?: (payload: Record<string, unknown>) => void
   }
   type RenderMode = 'initial' | 'range' | 'refresh'
   const pageRuntime = usePageRuntime('dashboard')
   const DASHBOARD_DATA_REQUEST_KEY = 'dashboard:data'
   const CHART_BOOTSTRAP_TIMER_KEY = 'dashboard:chart-bootstrap'
   const DASHBOARD_POLL_TIMER_KEY = 'dashboard:poll'
-  const DASHBOARD_POLL_INTERVAL_MS = 5_000
   const dashboardQueryError = ref('')
   const dashboardDataQuery = usePageQuery({
     runtime: pageRuntime,
@@ -101,11 +146,21 @@ export function useDashboardPage() {
   const dashboardLoadError = ref('')
   const dashboardDataWarning = ref('')
 
-  const modelTimeRange = ref<DashboardTimeRange>(DEFAULT_DASHBOARD_TIME_RANGE)
-  const trendTimeRange = ref<DashboardTimeRange>(DEFAULT_DASHBOARD_TIME_RANGE)
-  const successRateTimeRange = ref<DashboardTimeRange>(DEFAULT_DASHBOARD_TIME_RANGE)
-  const responseTimeTimeRange = ref<DashboardTimeRange>(DEFAULT_DASHBOARD_TIME_RANGE)
-  const detailTimeRange = ref<DashboardTimeRange>(DEFAULT_DASHBOARD_TIME_RANGE)
+  const defaultTimeRange = readDashboardDefaultTimeRange()
+  const modelTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+  const trendTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+  const activityTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+  const responseTimeTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+  const modelResponseTimeTimeRange = ref<DashboardTimeRange>(defaultTimeRange)
+
+  function applyDashboardDefaultTimeRange() {
+    const nextTimeRange = readDashboardDefaultTimeRange()
+    modelTimeRange.value = nextTimeRange
+    trendTimeRange.value = nextTimeRange
+    activityTimeRange.value = nextTimeRange
+    responseTimeTimeRange.value = nextTimeRange
+    modelResponseTimeTimeRange.value = nextTimeRange
+  }
 
   function createDefaultStats() {
     return [
@@ -162,7 +217,12 @@ export function useDashboardPage() {
 
   const stats = ref(createDefaultStats())
   const dashboardRanges = shallowRef<DashboardResponse['ranges'] | null>(null)
+  const activityBuckets = computed(() => (
+    dashboardRanges.value?.[activityTimeRange.value]?.buckets ?? []
+  ))
   const dashboardRuntime = shallowRef<DashboardResponse['runtime'] | null>(null)
+  const dashboardOperations = shallowRef<DashboardResponse['operations'] | null>(null)
+  const dashboardVersion = ref('--')
 
   // 每个图表独立的数据状态
   function createEmptyChartData() {
@@ -172,10 +232,7 @@ export function useDashboardPage() {
         finalFailedRequests: [] as number[],
         switchCount: [] as number[],
         successRequests: [] as number[],
-      },
-      successRate: {
-        labels: [] as string[],
-        values: [] as Array<number | null>,
+        successRate: [] as Array<number | null>,
       },
       model: {
         labels: [] as string[],
@@ -183,11 +240,11 @@ export function useDashboardPage() {
       },
       responseTime: {
         labels: [] as string[],
-        modelAvgSuccessDurationMs: {} as Record<string, Array<number | null>>,
+        avgSuccessDurationMs: [] as Array<number | null>,
       },
-      detail: {
+      modelResponseTime: {
         labels: [] as string[],
-        buckets: [] as DashboardBucket[],
+        modelAvgSuccessDurationMs: {} as Record<string, Array<number | null>>,
       },
     }
   }
@@ -205,16 +262,14 @@ export function useDashboardPage() {
   } | null = null
   const trendChartRef = ref<HTMLDivElement | null>(null)
   const modelChartRef = ref<HTMLDivElement | null>(null)
-  const successRateChartRef = ref<HTMLDivElement | null>(null)
   const responseTimeChartRef = ref<HTMLDivElement | null>(null)
-  const detailChartRef = ref<HTMLDivElement | null>(null)
+  const modelResponseTimeChartRef = ref<HTMLDivElement | null>(null)
 
   const charts = {
     trend: null as ChartInstance | null,
     model: null as ChartInstance | null,
-    successRate: null as ChartInstance | null,
     responseTime: null as ChartInstance | null,
-    detail: null as ChartInstance | null,
+    modelResponseTime: null as ChartInstance | null,
   }
 
   type ChartKey = keyof typeof charts
@@ -231,9 +286,8 @@ export function useDashboardPage() {
   const chartFirstRenderState = ref<Record<ChartKey, boolean>>({
     trend: true,
     model: true,
-    successRate: true,
     responseTime: true,
-    detail: true,
+    modelResponseTime: true,
   })
   const chartsBootstrapped = ref(false)
   const dashboardDataReady = ref(false)
@@ -245,9 +299,8 @@ export function useDashboardPage() {
     return [
       trendChartRef.value,
       modelChartRef.value,
-      successRateChartRef.value,
       responseTimeChartRef.value,
-      detailChartRef.value,
+      modelResponseTimeChartRef.value,
     ].filter((element): element is HTMLDivElement => Boolean(element))
   }
 
@@ -330,9 +383,8 @@ export function useDashboardPage() {
     if (chartsBootstrapped.value || !pageRuntime.canRun.value) return
     initChart(trendChartRef.value, 'trend', updateTrendChart)
     initChart(modelChartRef.value, 'model', updateModelChart)
-    initChart(successRateChartRef.value, 'successRate', updateSuccessRateChart)
     initChart(responseTimeChartRef.value, 'responseTime', updateResponseTimeChart)
-    initChart(detailChartRef.value, 'detail', updateDetailChart)
+    initChart(modelResponseTimeChartRef.value, 'modelResponseTime', updateModelResponseTimeChart)
     chartsBootstrapped.value = true
     bindChartResizeObserver()
   }
@@ -341,9 +393,8 @@ export function useDashboardPage() {
     chartFirstRenderState.value = {
       trend: true,
       model: true,
-      successRate: true,
       responseTime: true,
-      detail: true,
+      modelResponseTime: true,
     }
   }
 
@@ -383,22 +434,30 @@ export function useDashboardPage() {
     })
   }
 
-  const dashboardPolling = useVisibilityPolling({
+  const dashboardPolling = useSerialVisibilityPolling({
     runtime: pageRuntime,
     key: DASHBOARD_POLL_TIMER_KEY,
-    intervalMs: DASHBOARD_POLL_INTERVAL_MS,
+    intervalMs: () => readDashboardRefreshIntervalSeconds() * 1000,
     action: async () => {
       await refreshDashboardData({ silent: true })
     },
   })
 
+  let applyDefaultTimeRangeWhenShown = false
+
   pageRuntime.onActivate(({ visible }) => {
-    if (!visible) return
+    if (!visible) {
+      applyDefaultTimeRangeWhenShown = true
+      return
+    }
+    applyDefaultTimeRangeWhenShown = false
+    applyDashboardDefaultTimeRange()
     bindResizeListener()
     void reloadDashboardOnEnter()
   })
 
   pageRuntime.onDeactivate(() => {
+    applyDefaultTimeRangeWhenShown = false
     dashboardPolling.stop()
     unbindResizeListener()
     dashboardEntrySeq += 1
@@ -415,6 +474,10 @@ export function useDashboardPage() {
   })
 
   pageRuntime.onShow(() => {
+    if (applyDefaultTimeRangeWhenShown) {
+      applyDefaultTimeRangeWhenShown = false
+      applyDashboardDefaultTimeRange()
+    }
     bindResizeListener()
     void reloadDashboardOnEnter()
   })
@@ -432,19 +495,73 @@ export function useDashboardPage() {
     if (!charts.trend) return
 
     const theme = getLineChartTheme()
-    const series = buildDashboardTrendSeries(chartData.value.trend, createLineSeries, {
+    const trendSeries = buildDashboardTrendSeries(chartData.value.trend, createLineSeries, {
       success: chartColors.primary,
       failure: chartColors.danger,
       switchAccount: chartColors.purple,
     })
+    const hasSuccessRateData = chartData.value.trend.successRate.some((value) => value !== null)
+    const useDemoData = import.meta.env.DEV && !hasSuccessRateData
+    const labels = useDemoData
+      ? resolveDemoLabels(chartData.value.trend.labels)
+      : chartData.value.trend.labels
+    const successRateValues = useDemoData
+      ? resampleDemoValues(SUCCESS_RATE_DEMO_VALUES, labels.length)
+      : chartData.value.trend.successRate
+    const hasTrendData = chartData.value.trend.successRequests.some(value => value > 0)
+      || chartData.value.trend.finalFailedRequests.some(value => value > 0)
+      || chartData.value.trend.switchCount.some(value => value > 0)
+      || hasSuccessRateData
+    const successRateSeries = {
+      ...createStraightAreaLineSeries('成功率', successRateValues, chartColors.warning, 0.08),
+      yAxisIndex: 1,
+      symbolSize: 4,
+      connectNulls: true,
+    }
 
     applyAnimatedOption('trend', {
       ...theme,
+      tooltip: {
+        ...theme.tooltip,
+        formatter: (params: unknown) => formatDashboardAxisTooltip(params, (value, item) => (
+          item.seriesName === '成功率'
+            ? `${value.toFixed(1)}%`
+            : value.toLocaleString('zh-CN')
+        )),
+      },
+      legend: {
+        ...theme.legend,
+        data: [...trendSeries.map(series => series.name), '成功率'],
+      },
+      grid: {
+        ...theme.grid,
+        top: 44,
+        bottom: 32,
+      },
       xAxis: {
         ...theme.xAxis,
-        data: chartData.value.trend.labels,
+        data: labels,
       },
-      series,
+      yAxis: [
+        {
+          ...theme.yAxis,
+          minInterval: 1,
+        },
+        {
+          ...theme.yAxis,
+          position: 'right',
+          min: 0,
+          max: 100,
+          axisLabel: {
+            ...theme.yAxis.axisLabel,
+            formatter: '{value}%',
+          },
+        },
+      ],
+      graphic: useDemoData || hasTrendData
+        ? (useDemoData ? [demoChartGraphic()] : [])
+        : [emptyChartGraphic('当前范围内暂无可统计请求')],
+      series: [...trendSeries, successRateSeries],
     }, mode)
   }
 
@@ -525,6 +642,10 @@ export function useDashboardPage() {
         ...theme.tooltip,
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        formatter: (params: unknown) => formatDashboardAxisTooltip(
+          params,
+          (value) => value.toLocaleString('zh-CN'),
+        ),
       },
       legend: {
         ...theme.legend,
@@ -584,28 +705,26 @@ export function useDashboardPage() {
     chartData.value.trend.finalFailedRequests = trend.final_failed_requests
     chartData.value.trend.switchCount = trend.switch_count
     chartData.value.trend.successRequests = trend.success_requests
-  }
-
-  function applySuccessRateRangeToChartData(range: DashboardRangeStats) {
-    const trend = range.trend
-    chartData.value.successRate.labels = trend.labels
-    chartData.value.successRate.values = trend.success_rate
+    chartData.value.trend.successRate = trend.success_rate
   }
 
   function applyResponseTimeRangeToChartData(range: DashboardRangeStats) {
     const trend = range.trend
     chartData.value.responseTime.labels = trend.labels
-    chartData.value.responseTime.modelAvgSuccessDurationMs = trend.model_avg_success_duration_ms
+    chartData.value.responseTime.avgSuccessDurationMs = range.buckets.map(
+      (bucket) => bucket.avg_success_duration_ms,
+    )
+  }
+
+  function applyModelResponseTimeRangeToChartData(range: DashboardRangeStats) {
+    const trend = range.trend
+    chartData.value.modelResponseTime.labels = trend.labels
+    chartData.value.modelResponseTime.modelAvgSuccessDurationMs = trend.model_avg_success_duration_ms
   }
 
   function applyModelRangeToChartData(range: DashboardRangeStats) {
     chartData.value.model.labels = range.trend.labels
     chartData.value.model.successRequests = range.trend.model_success_requests
-  }
-
-  function applyDetailRangeToChartData(range: DashboardRangeStats) {
-    chartData.value.detail.labels = range.trend.labels
-    chartData.value.detail.buckets = range.buckets
   }
 
   function bindChartRange(
@@ -622,9 +741,12 @@ export function useDashboardPage() {
 
   bindChartRange(modelTimeRange, applyModelRangeToChartData, updateModelChart)
   bindChartRange(trendTimeRange, applyTrendRangeToChartData, updateTrendChart)
-  bindChartRange(successRateTimeRange, applySuccessRateRangeToChartData, updateSuccessRateChart)
   bindChartRange(responseTimeTimeRange, applyResponseTimeRangeToChartData, updateResponseTimeChart)
-  bindChartRange(detailTimeRange, applyDetailRangeToChartData, updateDetailChart)
+  bindChartRange(
+    modelResponseTimeTimeRange,
+    applyModelResponseTimeRangeToChartData,
+    updateModelResponseTimeChart,
+  )
 
   function getDashboardRenderSignature(snapshot: DashboardResponse) {
     const accounts = snapshot.accounts
@@ -637,13 +759,19 @@ export function useDashboardPage() {
         accounts.disabled,
         accounts.total_quota,
       ],
-      runtime: snapshot.runtime,
       ranges: snapshot.meta.available_ranges.map((timeRange) => ({
         timeRange,
         trend: snapshot.ranges[timeRange].trend,
         totals: snapshot.ranges[timeRange].totals,
         switching: snapshot.ranges[timeRange].switching,
-        buckets: snapshot.ranges[timeRange].buckets,
+        buckets: snapshot.ranges[timeRange].buckets.map((bucket) => [
+          bucket.start_at,
+          bucket.total_calls,
+          bucket.success_calls,
+          bucket.final_failed_calls,
+          bucket.success_rate,
+          bucket.avg_success_duration_ms,
+        ]),
       })),
     })
   }
@@ -653,6 +781,8 @@ export function useDashboardPage() {
     dashboardSnapshot = snapshot
     dashboardRanges.value = snapshot.ranges
     dashboardRuntime.value = snapshot.runtime
+    dashboardOperations.value = snapshot.operations
+    dashboardVersion.value = snapshot.version
     dashboardDataWarning.value = snapshot.metrics.status === 'degraded'
       ? '统计数据暂未更新，当前展示最近一次可用快照。'
       : ''
@@ -661,17 +791,15 @@ export function useDashboardPage() {
     applyAccountStats(snapshot.accounts)
     applyModelRangeToChartData(snapshot.ranges[modelTimeRange.value])
     applyTrendRangeToChartData(snapshot.ranges[trendTimeRange.value])
-    applySuccessRateRangeToChartData(snapshot.ranges[successRateTimeRange.value])
     applyResponseTimeRangeToChartData(snapshot.ranges[responseTimeTimeRange.value])
-    applyDetailRangeToChartData(snapshot.ranges[detailTimeRange.value])
+    applyModelResponseTimeRangeToChartData(snapshot.ranges[modelResponseTimeTimeRange.value])
     return true
   }
 
   function updatePrimaryCharts(mode: RenderMode = 'refresh') {
     updateTrendChart(mode)
-    updateSuccessRateChart(mode)
     updateResponseTimeChart(mode)
-    updateDetailChart(mode)
+    updateModelResponseTimeChart(mode)
   }
 
   function updateDashboardCharts(mode: RenderMode = 'refresh') {
@@ -757,132 +885,29 @@ export function useDashboardPage() {
     void reloadDashboardOnEnter()
   }
 
-  function updateSuccessRateChart(mode: RenderMode = 'refresh') {
-    if (!charts.successRate) return
-
+  function createDurationChartOption(
+    labels: string[],
+    series: Array<Record<string, unknown>>,
+    legendData: string[],
+    graphic: Array<Record<string, unknown>>,
+  ) {
     const theme = getLineChartTheme()
-    const hasData = chartData.value.successRate.values.some((value) => value !== null)
-    const useDemoData = import.meta.env.DEV && !hasData
-    const labels = useDemoData
-      ? resolveDemoLabels(chartData.value.successRate.labels)
-      : chartData.value.successRate.labels
-    const values = useDemoData
-      ? resampleDemoValues(SUCCESS_RATE_DEMO_VALUES, labels.length)
-      : chartData.value.successRate.values
-    applyAnimatedOption('successRate', {
+    return {
       ...theme,
+      color: series.map((item) => item.itemStyle && typeof item.itemStyle === 'object'
+        ? (item.itemStyle as { color?: string }).color
+        : undefined).filter(Boolean),
       tooltip: {
         ...theme.tooltip,
         trigger: 'axis',
-        formatter: (params: any) => {
-          if (!params || params.length === 0) return ''
-          const param = params[0]
-          const value = typeof param.value === 'number' && Number.isFinite(param.value)
-            ? `${param.value}%`
-            : '--'
-          return `<div style="font-weight: 600; margin-bottom: 4px;">${param.axisValue}</div>
-            <div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
-              <span>${param.marker} ${param.seriesName}</span>
-              <span style="font-weight: 600;">${value}</span>
-            </div>`
-        },
-      },
-      grid: {
-        ...theme.grid,
-        top: 32,
-        bottom: 32,
-      },
-      xAxis: {
-        ...theme.xAxis,
-        data: labels,
-      },
-      yAxis: {
-        ...theme.yAxis,
-        max: 100,
-        axisLabel: {
-          ...theme.yAxis.axisLabel,
-          formatter: '{value}%',
-        },
-      },
-      graphic: useDemoData
-        ? [demoChartGraphic()]
-        : (hasData ? [] : [emptyChartGraphic('当前范围内暂无可统计请求')]),
-      series: [
-        createStraightAreaLineSeries('成功率', values, chartColors.success, 0.22),
-      ],
-    }, mode)
-  }
-
-  function updateResponseTimeChart(mode: RenderMode = 'refresh') {
-    if (!charts.responseTime) return
-
-    const theme = getLineChartTheme()
-    const responseSeriesByModel = chartData.value.responseTime.modelAvgSuccessDurationMs
-    const realModelNames = Object.keys(responseSeriesByModel)
-      .filter((modelName) => (responseSeriesByModel[modelName] || []).some((value) => Number(value || 0) > 0))
-    const useDemoData = import.meta.env.DEV && realModelNames.length === 0
-    const modelNames = useDemoData ? ['演示模型'] : realModelNames
-    const labels = useDemoData
-      ? resolveDemoLabels(chartData.value.responseTime.labels)
-      : chartData.value.responseTime.labels
-
-    if (modelNames.length === 0) {
-      applyAnimatedOption('responseTime', {
-        ...theme,
-        grid: {
-          ...theme.grid,
-          top: 32,
-          bottom: 32,
-        },
-        xAxis: {
-          ...theme.xAxis,
-          data: chartData.value.responseTime.labels,
-        },
-        yAxis: {
-          ...theme.yAxis,
-          axisLabel: {
-            ...theme.yAxis.axisLabel,
-            formatter: '{value}s',
-          },
-        },
-        graphic: [emptyChartGraphic('当前范围内暂无成功耗时')],
-        series: [],
-      }, mode)
-      return
-    }
-
-    const series = modelNames.map((modelName) => {
-      const color = getModelColor(modelName)
-      const seconds = useDemoData
-        ? resampleDemoValues(SUCCESS_DURATION_DEMO_SECONDS, labels.length)
-        : (responseSeriesByModel[modelName] || []).map((ms) => (
-            ms === null ? null : Number((ms / 1000).toFixed(2))
-          ))
-      return createStraightAreaLineSeries(modelName, seconds, color, 0.16)
-    })
-
-    applyAnimatedOption('responseTime', {
-      ...theme,
-      color: modelNames.map((modelName) => getModelColor(modelName)),
-      tooltip: {
-        ...theme.tooltip,
-        trigger: 'axis',
-        formatter: (params: any) => {
-          if (!params || params.length === 0) return ''
-          let result = `<div style="font-weight: 600; margin-bottom: 4px;">${params[0].axisValue}</div>`
-          params.forEach((item: any) => {
-            if (typeof item.value !== 'number' || !Number.isFinite(item.value)) return
-            result += `<div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
-              <span>${item.marker} ${item.seriesName}</span>
-              <span style="font-weight: 600;">${item.value}s</span>
-            </div>`
-          })
-          return result
-        },
+        formatter: (params: unknown) => formatDashboardAxisTooltip(
+          params,
+          (value) => `${value}s`,
+        ),
       },
       legend: {
         ...theme.legend,
-        data: modelNames,
+        data: legendData,
         top: 0,
         right: 0,
         type: 'scroll',
@@ -893,7 +918,7 @@ export function useDashboardPage() {
       },
       grid: {
         ...theme.grid,
-        top: modelNames.length > 5 ? 56 : 48,
+        top: legendData.length > 5 ? 56 : legendData.length ? 48 : 32,
         bottom: 32,
       },
       xAxis: {
@@ -907,170 +932,97 @@ export function useDashboardPage() {
           formatter: '{value}s',
         },
       },
-      graphic: useDemoData ? [demoChartGraphic()] : [],
+      graphic,
       series,
-    }, mode)
+    }
   }
 
-  function updateDetailChart(mode: RenderMode = 'refresh') {
-    if (!charts.detail) return
+  function durationSeconds(values: Array<number | null>) {
+    return values.map((value) => value === null ? null : Number((value / 1000).toFixed(2)))
+  }
 
-    const theme = getLineChartTheme()
-    const buckets = chartData.value.detail.buckets
-    const labels = chartData.value.detail.labels
-    const barMaxWidth = resolveDashboardBarMaxWidth(labels.length)
-    const currentConcurrency = dashboardRuntime.value?.current_concurrency ?? 0
-    const currentConcurrencySeries = buckets.map((_, index) => (
-      index === buckets.length - 1 ? currentConcurrency : null
-    ))
-    const hasData = buckets.some((bucket) => (
-      bucket.total_calls > 0 || bucket.switch_count > 0 || bucket.switch_recovered > 0
-    )) || currentConcurrency > 0
-    const durationSeconds = (value: number | null) => (
-      value === null ? null : Number((value / 1_000).toFixed(2))
-    )
-    const formatDuration = (value: number | null) => {
-      if (value === null) return '--'
-      if (value < 1_000) return `${Math.round(value)}ms`
-      if (value < 60_000) return `${(value / 1_000).toFixed(1)}s`
-      return `${(value / 60_000).toFixed(1)}m`
-    }
-    const formatPercent = (value: number | null) => (
-      value === null ? '--' : `${value.toFixed(1)}%`
-    )
+  function updateResponseTimeChart(mode: RenderMode = 'refresh') {
+    if (!charts.responseTime) return
 
-    applyAnimatedOption('detail', {
-      ...theme,
-      tooltip: {
-        ...theme.tooltip,
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-        formatter: (params: any[]) => {
-          const dataIndex = params?.[0]?.dataIndex
-          const bucket = Number.isInteger(dataIndex) ? buckets[dataIndex] : null
-          if (!bucket) return ''
-          return `<div style="font-weight:600;margin-bottom:6px">${bucket.label}</div>
-            <div style="display:grid;grid-template-columns:auto auto;gap:3px 18px">
-              <span>调用</span><strong>${bucket.total_calls}</strong>
-              <span>成功 / 最终失败</span><strong>${bucket.success_calls} / ${bucket.final_failed_calls}</strong>
-              <span>成功率</span><strong>${formatPercent(bucket.success_rate)}</strong>
-              <span>平均耗时</span><strong>${formatDuration(bucket.avg_success_duration_ms)}</strong>
-              <span>当前并发</span><strong>${dataIndex === buckets.length - 1 ? currentConcurrency : '--'}</strong>
-              <span>账号切换 / 恢复</span><strong>${bucket.switch_count} / ${bucket.switch_recovered}</strong>
-              <span>切换恢复率</span><strong>${formatPercent(bucket.switch_recovery_rate)}</strong>
-            </div>`
-        },
-      },
-      legend: {
-        ...theme.legend,
-        data: ['成功', '最终失败', '平均耗时', '当前并发', '账号切换', '切换恢复'],
-        top: 0,
-        right: 0,
-        type: 'scroll',
-      },
-      grid: {
-        left: 46,
-        right: 52,
-        top: 52,
-        bottom: 38,
-      },
-      xAxis: {
-        ...theme.xAxis,
-        type: 'category',
-        data: labels,
-        boundaryGap: true,
-        axisTick: { show: false },
-      },
-      yAxis: [
-        {
-          ...theme.yAxis,
-          type: 'value',
-          minInterval: 1,
-        },
-        {
-          ...theme.yAxis,
-          type: 'value',
-          position: 'right',
-          axisLabel: {
-            ...theme.yAxis.axisLabel,
-            formatter: '{value}s',
-          },
-        },
-      ],
-      graphic: hasData ? [] : [emptyChartGraphic('当前范围内暂无调用明细')],
-      series: [
-        {
-          name: '成功',
-          type: 'bar',
-          stack: 'result',
-          barMaxWidth,
-          data: buckets.map((bucket) => bucket.success_calls),
-          itemStyle: { color: chartColors.success },
-        },
-        {
-          name: '最终失败',
-          type: 'bar',
-          stack: 'result',
-          barMaxWidth,
-          data: buckets.map((bucket) => bucket.final_failed_calls),
-          itemStyle: { color: chartColors.danger, borderRadius: [4, 4, 0, 0] },
-        },
-        {
-          ...createLineSeries(
-            '平均耗时',
-            buckets.map((bucket) => durationSeconds(bucket.avg_success_duration_ms)),
-            chartColors.primary,
-            { areaOpacity: 0.12, zIndex: 2 },
-          ),
-          yAxisIndex: 1,
-          connectNulls: true,
-        },
-        {
-          ...createLineSeries(
-            '当前并发',
-            currentConcurrencySeries,
-            chartColors.warning,
-            { areaOpacity: 0, zIndex: 3 },
-          ),
-          symbolSize: 8,
-        },
-        {
-          ...createLineSeries(
-            '账号切换',
-            buckets.map((bucket) => bucket.switch_count),
-            chartColors.purple,
-            { areaOpacity: 0, lineStyle: { type: 'dashed', width: 2 }, zIndex: 4 },
-          ),
-        },
-        {
-          ...createLineSeries(
-            '切换恢复',
-            buckets.map((bucket) => bucket.switch_recovered),
-            chartColors.info,
-            { areaOpacity: 0, lineStyle: { type: 'dotted', width: 2 }, zIndex: 5 },
-          ),
-        },
-      ],
-    }, mode)
+    const realValues = chartData.value.responseTime.avgSuccessDurationMs
+    const hasData = realValues.some((value) => value !== null && Number(value) >= 0)
+    const useDemoData = import.meta.env.DEV && !hasData
+    const labels = useDemoData
+      ? resolveDemoLabels(chartData.value.responseTime.labels)
+      : chartData.value.responseTime.labels
+    const values = useDemoData
+      ? resampleDemoValues(SUCCESS_DURATION_DEMO_SECONDS, labels.length)
+      : durationSeconds(realValues)
+    const series = [
+      createStraightAreaLineSeries(
+        '平均耗时',
+        values,
+        chartColors.primary,
+        0.16,
+      ),
+    ]
+
+    applyAnimatedOption('responseTime', createDurationChartOption(
+      labels,
+      hasData || useDemoData ? series : [],
+      hasData || useDemoData ? ['平均耗时'] : [],
+      useDemoData
+        ? [demoChartGraphic()]
+        : (hasData ? [] : [emptyChartGraphic('当前范围内暂无成功耗时')]),
+    ), mode)
+  }
+
+  function updateModelResponseTimeChart(mode: RenderMode = 'refresh') {
+    if (!charts.modelResponseTime) return
+
+    const responseSeriesByModel = chartData.value.modelResponseTime.modelAvgSuccessDurationMs
+    const realModelNames = Object.keys(responseSeriesByModel)
+      .filter((modelName) => (responseSeriesByModel[modelName] || []).some((value) => Number(value || 0) > 0))
+    const useDemoData = import.meta.env.DEV && realModelNames.length === 0
+    const modelNames = useDemoData ? ['演示模型'] : realModelNames
+    const labels = useDemoData
+      ? resolveDemoLabels(chartData.value.modelResponseTime.labels)
+      : chartData.value.modelResponseTime.labels
+
+    const series = modelNames.map((modelName) => {
+      const color = getModelColor(modelName)
+      const seconds = useDemoData
+        ? resampleDemoValues(SUCCESS_DURATION_DEMO_SECONDS, labels.length)
+        : (responseSeriesByModel[modelName] || []).map((ms) => (
+            ms === null ? null : Number((ms / 1000).toFixed(2))
+          ))
+      return createStraightAreaLineSeries(modelName, seconds, color, 0.16)
+    })
+
+    applyAnimatedOption('modelResponseTime', createDurationChartOption(
+      labels,
+      series,
+      modelNames,
+      useDemoData
+        ? [demoChartGraphic()]
+        : (modelNames.length ? [] : [emptyChartGraphic('当前范围内暂无模型耗时')]),
+    ), mode)
   }
 
   return {
     stats,
     dashboardRanges,
     dashboardRuntime,
+    dashboardOperations,
     dashboardDataReady,
     dashboardLoadError,
     retryDashboard,
     dashboardDataWarning,
+    dashboardVersion,
     modelTimeRange,
     trendTimeRange,
-    successRateTimeRange,
+    activityTimeRange,
     responseTimeTimeRange,
-    detailTimeRange,
+    modelResponseTimeTimeRange,
+    activityBuckets,
     trendChartRef,
-    successRateChartRef,
     responseTimeChartRef,
+    modelResponseTimeChartRef,
     modelChartRef,
-    detailChartRef,
   }
 }

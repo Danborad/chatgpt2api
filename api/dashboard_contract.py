@@ -28,7 +28,27 @@ class DashboardMetricsView(BaseModel):
 
 
 class DashboardRuntimeView(BaseModel):
-    current_concurrency: int = Field(ge=0)
+    runtime_mode: Literal["docker", "native"]
+    instance_name: str
+    distribution: str
+    kernel_version: str
+    architecture: str
+    python_version: str
+    cpu_capacity: float = Field(gt=0)
+    service_started_at: str
+    service_uptime_seconds: int = Field(ge=0)
+    process_cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    process_memory_bytes: int | None = Field(default=None, ge=0)
+    process_memory_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_scope: Literal["container", "system", "visible"]
+    memory_percent: float | None = Field(default=None, ge=0, le=100)
+    storage_percent: float | None = Field(default=None, ge=0, le=100)
+    network_rx_bytes_per_sec: float | None = Field(default=None, ge=0)
+    network_tx_bytes_per_sec: float | None = Field(default=None, ge=0)
+
+
+class DashboardOperationsView(BaseModel):
+    active_requests: int = Field(ge=0)
 
 
 class DashboardAccountView(BaseModel):
@@ -126,6 +146,7 @@ class DashboardResponseView(BaseModel):
     meta: DashboardMetaView
     metrics: DashboardMetricsView
     runtime: DashboardRuntimeView
+    operations: DashboardOperationsView
     accounts: DashboardAccountView
     storage: DashboardStorageView
     ranges: dict[DashboardTimeRange, DashboardRangeView]

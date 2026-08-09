@@ -2,7 +2,7 @@ import apiClient from './client'
 import type { DashboardResponse, DashboardTimeRangeKey } from '@/types/api'
 
 const DASHBOARD_TIME_RANGES: DashboardTimeRangeKey[] = ['24h', '7d', '30d']
-const DASHBOARD_VIEW_SCHEMA_VERSION = 4
+const DASHBOARD_VIEW_SCHEMA_VERSION = 5
 type JsonObject = Record<string, unknown>
 
 function contractError(path: string, expected: string): never {
@@ -30,6 +30,10 @@ function expectNumber(value: unknown, path: string, integer = false) {
 
 function expectNullableNumber(value: unknown, path: string) {
   if (value !== null) expectNumber(value, path)
+}
+
+function expectNullableInteger(value: unknown, path: string) {
+  if (value !== null) expectNumber(value, path, true)
 }
 
 function expectNumberArray(value: unknown, path: string, length: number, integer = false) {
@@ -119,9 +123,53 @@ function validateMetrics(value: unknown) {
 
 function validateRuntime(value: unknown) {
   const runtime = expectObject(value, 'response.runtime')
-  expectNumber(runtime.current_concurrency, 'response.runtime.current_concurrency', true)
-  if (Number(runtime.current_concurrency) < 0) {
-    contractError('response.runtime.current_concurrency', 'non-negative integer')
+  if (runtime.runtime_mode !== 'docker' && runtime.runtime_mode !== 'native') {
+    contractError('response.runtime.runtime_mode', 'docker | native')
+  }
+  ;[
+    'instance_name', 'distribution', 'kernel_version', 'architecture',
+    'python_version', 'service_started_at',
+  ].forEach((field) => {
+    expectString(runtime[field], `response.runtime.${field}`)
+  })
+  expectNumber(runtime.cpu_capacity, 'response.runtime.cpu_capacity')
+  if (Number(runtime.cpu_capacity) <= 0) {
+    contractError('response.runtime.cpu_capacity', 'positive number')
+  }
+  expectNumber(runtime.service_uptime_seconds, 'response.runtime.service_uptime_seconds', true)
+  if (Number(runtime.service_uptime_seconds) < 0) {
+    contractError('response.runtime.service_uptime_seconds', 'non-negative integer')
+  }
+  if (!['container', 'system', 'visible'].includes(String(runtime.memory_scope))) {
+    contractError('response.runtime.memory_scope', 'container | system | visible')
+  }
+  ;[
+    'process_cpu_percent', 'process_memory_percent', 'memory_percent', 'storage_percent',
+    'network_rx_bytes_per_sec', 'network_tx_bytes_per_sec',
+  ].forEach((field) => {
+    expectNullableNumber(runtime[field], `response.runtime.${field}`)
+    if (runtime[field] !== null && Number(runtime[field]) < 0) {
+      contractError(`response.runtime.${field}`, 'non-negative number')
+    }
+    if (
+      runtime[field] !== null
+      && ['process_cpu_percent', 'process_memory_percent', 'memory_percent', 'storage_percent'].includes(field)
+      && Number(runtime[field]) > 100
+    ) {
+      contractError(`response.runtime.${field}`, 'number between 0 and 100')
+    }
+  })
+  expectNullableInteger(runtime.process_memory_bytes, 'response.runtime.process_memory_bytes')
+  if (runtime.process_memory_bytes !== null && Number(runtime.process_memory_bytes) < 0) {
+    contractError('response.runtime.process_memory_bytes', 'non-negative integer')
+  }
+}
+
+function validateOperations(value: unknown) {
+  const operations = expectObject(value, 'response.operations')
+  expectNumber(operations.active_requests, 'response.operations.active_requests', true)
+  if (Number(operations.active_requests) < 0) {
+    contractError('response.operations.active_requests', 'non-negative integer')
   }
 }
 
@@ -227,6 +275,7 @@ function parseDashboardResponse(value: unknown): DashboardResponse {
 
   validateMetrics(root.metrics)
   validateRuntime(root.runtime)
+  validateOperations(root.operations)
   validateAccounts(root.accounts)
   validateStorage(root.storage)
   const ranges = expectObject(root.ranges, 'response.ranges')

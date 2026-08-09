@@ -178,9 +178,9 @@ class RealtimeMonitorService:
                 "previous_tokens": _int_ms(previous_tokens),
             }
 
-    def current_concurrency(self) -> int:
+    def operations_snapshot(self) -> dict[str, int]:
         with self._lock:
-            return len(self._active)
+            return {"active_requests": len(self._active)}
 
     def start(
         self,
