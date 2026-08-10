@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v3.2.0-111827" alt="Version v3.2.0" />
+  <img src="https://img.shields.io/badge/version-v3.2.1-111827" alt="Version v3.2.1" />
   <img src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13" />
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white" alt="Vue 3" />
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18" />
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yukkcat/chatgpt2api/releases/tag/v3.2.0">v3.2.0 Release</a>
+  <a href="https://github.com/yukkcat/chatgpt2api/releases/tag/v3.2.1">v3.2.1 Release</a>
   · <a href="./CHANGELOG.md">Changelog</a>
   · <a href="./docs/README.md">Documentation</a>
 </p>
@@ -45,10 +45,10 @@ curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/main/deploy/ins
 
 The installer lets you choose SQLite, a local PostgreSQL 18 container, or an existing PostgreSQL URL. SQLite requires no additional service. Local PostgreSQL is started and persisted automatically through Compose.
 
-To install the fixed `v3.2.0` release:
+To install the fixed `v3.2.1` release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/v3.2.0/deploy/install.sh | sudo bash -s -- --branch v3.2.0
+curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/v3.2.1/deploy/install.sh | sudo bash -s -- --branch v3.2.1
 ```
 
 ### Docker Compose
