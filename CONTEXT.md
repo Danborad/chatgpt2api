@@ -117,7 +117,7 @@ _Avoid_: A global repository for settings, logs, images, and task state
 - An **Editable File Task** publishes one primary **Editable File Asset** and one ZIP **Editable File Asset** when it succeeds; asset reads do not depend on retaining the task record.
 - An image call contains one or more **Image Attempts**; an **Account Switch** links consecutive attempts but is not itself a terminal result.
 - A completed public invocation produces one **Call Record**, while an **Active Request** exists only during the live request window.
-- A **Dashboard Metric Projection** advances from the last processed **Call Record** sequence and retains only hourly aggregates; destructive Call Record changes invalidate its cursor and trigger a rebuild.
+- A **Dashboard Metric Projection** advances from the last processed **Call Record** sequence and retains only hourly aggregates; user-facing log deletion and automatic retention preserve that cursor, while explicit repository operations that rotate the **Call Record** generation require a rebuild.
 - An **Upstream Account** can reference one **Proxy Reference**, which may select one **Proxy Group**.
 - The default egress is exactly one **Proxy Reference**; **Proxy Session** behavior cannot replace it.
 - Multiple **Prompt Sources** contribute items to one **Prompt Library**.

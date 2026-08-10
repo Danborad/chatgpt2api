@@ -34,7 +34,7 @@
 
 - 账号写入必须通过账号服务和 Account Repository。
 - 日志分页、筛选、删除和保留策略通过 Call Record Repository 执行。
-- Dashboard 正常同步只读取状态序号之后新增的 Call Record，并原子累加受影响的小时行；账号卡片、当前并发和运行环境不建立 Dashboard 持久化副本。
+- Dashboard 正常同步只读取状态序号之后新增的 Call Record，并原子累加受影响的小时行；用户在日志页删除记录和自动保留清理不会旋转 Call Record 游标，因此不收缩已经形成的 30 天投影；账号卡片、当前并发和运行环境不建立 Dashboard 持久化副本。
 - 所有领域 Repository 共享一个进程级 Engine，但不共享可变业务状态。
 - SQLite 使用 WAL、外键和 busy timeout；PostgreSQL 使用有界连接池。
 - `ImageStorageService` 统一图片保存、删除、压缩、清理和同步；调用方不能直接改图片索引。

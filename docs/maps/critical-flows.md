@@ -100,8 +100,12 @@ The Call Record is durable final truth. Active Requests and live operations are
 process-memory observations and may disappear on restart. The Dashboard Metric
 Projection reads only Call Records after its stored sequence during normal
 synchronization, updates affected hourly rows atomically, and rebuilds only when
-the Call Record generation changes. Its 30-day history remains independent of
-the shorter Call Record retention window.
+an explicit repository operation rotates the Call Record generation or an
+aggregate table is structurally incompatible. User-facing log deletion and
+automatic retention preserve the cursor, so the 30-day history remains
+independent of the shorter Call Record retention window. If only the projection
+state table is recreated, startup checkpoints the current cursor without
+deleting compatible hourly aggregates.
 
 ## Dashboard projection
 
