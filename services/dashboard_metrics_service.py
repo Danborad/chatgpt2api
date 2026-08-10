@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from services.call_view import call_outcome, call_switch_count
 from services.storage.dashboard_metrics_repository import (
     DashboardMetricsRepository,
+    DashboardMetricsSchemaReset,
     DashboardMetricsSourceChanged,
     DashboardMetricsState,
     DashboardMetricsWriteConflict,
@@ -212,11 +213,11 @@ class DashboardMetricsService:
         self._ingest_failed = False
         self._stale_reason: str | None = None
 
-    def reset_projection_schema_if_needed(self) -> bool:
+    def reset_projection_schema_if_needed(self) -> DashboardMetricsSchemaReset:
         """Reset stale physical projection tables without touching Call Records."""
         with self._lock:
             reset = self.repository.reset_schema_if_needed()
-            if reset:
+            if reset.projection_recreated:
                 self._ingest_failed = True
                 self._stale_reason = "projection_schema_reset"
             return reset
@@ -355,10 +356,37 @@ class DashboardMetricsService:
                         and not state.failure_reason
                         and not self._ingest_failed
                     )
+                    checkpoint_required = (
+                        not force_rebuild
+                        and state is None
+                        and not self._ingest_failed
+                        and self.repository.has_hourly_projection()
+                    )
                     now = _beijing_now_naive()
                     cutoff_bucket = _retention_cutoff(now)
                     try:
-                        if checkpoint_ready:
+                        if checkpoint_required:
+                            raw_end_cursor = log_source.current_call_cursor()
+                            end_cursor = self._normalize_log_cursor(raw_end_cursor)
+                            if end_cursor is None:
+                                raise LogCursorMismatch("call record cursor is invalid")
+                            next_state = DashboardMetricsState(
+                                call_record_generation=str(end_cursor["generation"]),
+                                last_sequence=int(end_cursor["sequence"]),
+                                status="ready",
+                                checkpoint_at=beijing_now().isoformat(timespec="seconds"),
+                            )
+                            self.repository.apply_increment(
+                                expected_revision=expected_revision,
+                                next_state=next_state,
+                                buckets={},
+                                cutoff_bucket=cutoff_bucket,
+                                source_cursor=end_cursor,
+                            )
+                            rebuilt = False
+                            record_count = 0
+                            mode = "checkpoint"
+                        elif checkpoint_ready:
                             cursor = state.cursor
                             if cursor is None:
                                 force_rebuild = True
@@ -395,6 +423,7 @@ class DashboardMetricsService:
                                 source_cursor=end_cursor,
                             )
                             rebuilt = False
+                            mode = "incremental"
                         else:
                             with log_source.open_call_window(None) as (items, raw_end_cursor):
                                 end_cursor = self._normalize_log_cursor(raw_end_cursor)
@@ -422,11 +451,12 @@ class DashboardMetricsService:
                                 source_cursor=end_cursor,
                             )
                             rebuilt = True
+                            mode = "rebuild"
 
                         self._reset_runtime_ingest_locked()
                         logger.info({
                             "event": "dashboard_metrics_log_cursor_synced",
-                            "mode": "rebuild" if rebuilt else "incremental",
+                            "mode": mode,
                             "records": record_count,
                         })
                         return rebuilt

@@ -57,8 +57,13 @@ def create_app() -> FastAPI:
             projection_reset = await run_in_threadpool(
                 dashboard_metrics_service.reset_projection_schema_if_needed
             )
-            if projection_reset:
-                logger.info({"event": "dashboard_metrics_projection_schema_reset"})
+            if projection_reset.changed:
+                logger.info({
+                    "event": "dashboard_metrics_projection_schema_reset",
+                    "state_recreated": projection_reset.state_recreated,
+                    "hourly_recreated": projection_reset.hourly_recreated,
+                    "model_hourly_recreated": projection_reset.model_hourly_recreated,
+                })
         except Exception as exc:
             logger.error({"event": "dashboard_metrics_projection_schema_reset_failed", "error": str(exc)})
         try:

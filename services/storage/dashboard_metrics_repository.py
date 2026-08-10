@@ -124,6 +124,21 @@ class DashboardMetricsWriteResult:
     changed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class DashboardMetricsSchemaReset:
+    state_recreated: bool = False
+    hourly_recreated: bool = False
+    model_hourly_recreated: bool = False
+
+    @property
+    def projection_recreated(self) -> bool:
+        return self.hourly_recreated or self.model_hourly_recreated
+
+    @property
+    def changed(self) -> bool:
+        return self.state_recreated or self.projection_recreated
+
+
 class DashboardMetricsWriteConflict(RuntimeError):
     pass
 
@@ -140,8 +155,8 @@ class DashboardMetricsRepository:
         self.engine = initialize_application_database(self.database_url)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
 
-    def reset_schema_if_needed(self) -> bool:
-        """Recreate only the rebuildable Dashboard projection tables."""
+    def reset_schema_if_needed(self) -> DashboardMetricsSchemaReset:
+        """Recreate only Dashboard tables whose physical schema is incompatible."""
         tables = (
             DashboardMetricStateModel.__table__,
             DashboardMetricHourlyModel.__table__,
@@ -155,18 +170,39 @@ class DashboardMetricsRepository:
                 )
             schema = inspect(connection)
             existing_tables = set(schema.get_table_names())
-            mismatched = any(
-                table.name in existing_tables
-                and {column["name"] for column in schema.get_columns(table.name)}
-                != {column.name for column in table.columns}
-                for table in tables
+
+            def incompatible(table: Any) -> bool:
+                if table.name not in existing_tables:
+                    return True
+                return {
+                    column["name"] for column in schema.get_columns(table.name)
+                } != {column.name for column in table.columns}
+
+            state_recreated = incompatible(DashboardMetricStateModel.__table__)
+            hourly_recreated = incompatible(DashboardMetricHourlyModel.__table__)
+            model_hourly_recreated = incompatible(DashboardMetricModelHourlyModel.__table__)
+
+            if hourly_recreated or model_hourly_recreated:
+                # Aggregates cannot remain internally consistent after either
+                # aggregate table changes, so rebuild the complete projection.
+                state_recreated = True
+                hourly_recreated = True
+                model_hourly_recreated = True
+                for table in reversed(tables):
+                    table.drop(connection, checkfirst=True)
+                DatabaseBase.metadata.create_all(connection, tables=list(tables))
+            elif state_recreated:
+                DashboardMetricStateModel.__table__.drop(connection, checkfirst=True)
+                DatabaseBase.metadata.create_all(
+                    connection,
+                    tables=[DashboardMetricStateModel.__table__],
+                )
+
+            return DashboardMetricsSchemaReset(
+                state_recreated=state_recreated,
+                hourly_recreated=hourly_recreated,
+                model_hourly_recreated=model_hourly_recreated,
             )
-            if not mismatched:
-                return False
-            for table in reversed(tables):
-                table.drop(connection, checkfirst=True)
-            DatabaseBase.metadata.create_all(connection, tables=list(tables))
-            return True
 
     def _lock(self, session: Any) -> None:
         if self.engine.dialect.name == "sqlite":
@@ -227,6 +263,16 @@ class DashboardMetricsRepository:
         session = self.Session()
         try:
             return self._state(session.get(DashboardMetricStateModel, 1))
+        finally:
+            session.close()
+
+    def has_hourly_projection(self) -> bool:
+        """Return whether a preserved hourly projection exists without loading it."""
+        session = self.Session()
+        try:
+            return session.scalar(
+                select(DashboardMetricHourlyModel.bucket_start).limit(1)
+            ) is not None
         finally:
             session.close()
 

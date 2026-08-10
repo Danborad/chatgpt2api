@@ -262,6 +262,17 @@ class CallRecordRepository:
         state.generation = uuid4().hex
         return str(state.generation)
 
+    def current_cursor(self) -> dict[str, Any]:
+        """Return the current append cursor without loading Call Record payloads."""
+        session = self.Session()
+        try:
+            return {
+                "generation": self._generation(session),
+                "sequence": int(session.scalar(select(func.max(CallRecordModel.sequence))) or 0),
+            }
+        finally:
+            session.close()
+
     @contextmanager
     def open_window(self, cursor: dict[str, Any] | None = None):
         session = self.Session()
@@ -273,7 +284,10 @@ class CallRecordRepository:
                 raise CallRecordCursorMismatch("call record cursor sequence is invalid") from None
             if cursor is not None and self._clean(cursor.get("generation")) != generation:
                 raise CallRecordCursorMismatch("call record generation changed")
-            end_sequence = int(session.scalar(select(func.max(CallRecordModel.sequence))) or 0)
+            end_sequence = max(
+                start_sequence,
+                int(session.scalar(select(func.max(CallRecordModel.sequence))) or 0),
+            )
             rows = session.scalars(
                 select(CallRecordModel)
                 .where(
@@ -305,7 +319,7 @@ class CallRecordRepository:
         finally:
             session.close()
 
-    def delete(self, ids: Sequence[str]) -> int:
+    def delete(self, ids: Sequence[str], *, preserve_cursor: bool = False) -> int:
         target_ids = tuple(dict.fromkeys(self._clean(item) for item in ids if self._clean(item)))
         if not target_ids:
             return 0
@@ -313,7 +327,7 @@ class CallRecordRepository:
         try:
             result = session.execute(delete(CallRecordModel).where(CallRecordModel.id.in_(target_ids)))
             removed = max(0, int(result.rowcount or 0))
-            if removed:
+            if removed and not preserve_cursor:
                 self._rotate_generation(session)
             session.commit()
             return removed

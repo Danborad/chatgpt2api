@@ -226,7 +226,7 @@ class CallRecordService:
         return build_call_detail(item) if item is not None else None
 
     def delete(self, ids: list[str]) -> dict[str, int]:
-        return {"removed": self.repository.delete(ids)}
+        return {"removed": self.repository.delete(ids, preserve_cursor=True)}
 
     def iter_items(self, *, type: str = "") -> Iterator[dict[str, Any]]:
         return self.repository.iter_records(type=self._clean(type))
@@ -236,6 +236,9 @@ class CallRecordService:
 
     def open_call_window(self, cursor: dict[str, Any] | None = None):
         return self.repository.open_window(cursor)
+
+    def current_call_cursor(self) -> dict[str, Any]:
+        return self.repository.current_cursor()
 
     def hold_call_cursor(self, cursor: dict[str, Any]):
         return self.repository.hold_cursor(cursor)
