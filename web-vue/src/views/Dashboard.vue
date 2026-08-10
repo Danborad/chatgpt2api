@@ -118,6 +118,7 @@
     <section class="grid grid-cols-1 gap-4">
       <ChartCard title="模型请求分布">
         <template #actions>
+          <HelpTip text="仅统计成功及部分成功请求。" />
           <TimeRangeTabs v-model="modelTimeRange" aria-label="模型请求分布时间范围" />
         </template>
         <div ref="modelChartRef" class="h-72 w-full px-2"></div>
@@ -213,7 +214,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Button, ChartCard, HoverCard, StatCard } from 'nanocat-ui'
+import { Button, ChartCard, HelpTip, HoverCard, StatCard } from 'nanocat-ui'
 import { Icon } from '@iconify/vue'
 import PageLoadingState from '@/components/ai/PageLoadingState.vue'
 import PagePanel from '@/components/ai/PagePanel.vue'

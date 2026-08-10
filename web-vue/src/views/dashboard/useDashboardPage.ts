@@ -687,7 +687,7 @@ export function useDashboardPage() {
         ...theme.yAxis,
         minInterval: 1,
       },
-      graphic: modelNames.length ? [] : [emptyChartGraphic('当前范围内暂无模型请求')],
+      graphic: modelNames.length ? [] : [emptyChartGraphic('当前范围内暂无成功请求')],
       series,
     }, mode)
   }
