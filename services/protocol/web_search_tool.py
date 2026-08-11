@@ -8,6 +8,7 @@ from services.openai_backend_api import OpenAIBackendAPI
 from services.protocol.search_execution import execute_search
 
 WEB_SEARCH_TOOL_TYPES = {"web_search", "web_search_preview", "web_search_preview_2025_03_11"}
+SEARCH_TIMEOUT_SECS = 600.0
 SEARCH_CHAT_MODEL_PREFIXES = (
     "gpt-4o-search-preview",
     "gpt-4o-mini-search-preview",
@@ -162,5 +163,6 @@ def run_web_search(
     return execute_search(
         query,
         backend_factory=OpenAIBackendAPI,
+        timeout_secs=SEARCH_TIMEOUT_SECS,
         decorate=decorate,
     )

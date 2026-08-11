@@ -65,9 +65,8 @@ DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
 CODEX_RESPONSES_MODEL = "gpt-5.5"
 SEARCH_MODEL = "gpt-5-5"
-SEARCH_TIMEOUT_SECS = 300.0
 SEARCH_POLL_INTERVAL_SECS = 3.0
-SEARCH_DONE_STATUS = {"finished_successfully", "finished_partial_completion"}
+SEARCH_DONE_STATUS = {"finished_successfully", "finished_partial_completion", "stop"}
 SEARCH_CONVERSATION_ID_RE = re.compile(r'"conversation_id"\s*:\s*"([^"]+)"')
 SEARCH_URL_RE = re.compile(r"https?://[^\s\"'<>）)\]}]+")
 SEARCH_CITATION_RE = re.compile(r"\ue200cite\ue202([^\ue201]*)\ue201")
@@ -75,7 +74,6 @@ SEARCH_IMAGE_GROUP_RE = re.compile(r"\ue200image_group\ue202([^\ue201]*)\ue201")
 SEARCH_INTERNAL_BLOCK_RE = re.compile(r"\ue200(?!cite\ue202|image_group\ue202)[a-zA-Z0-9_]+\ue202[^\ue201]*\ue201")
 EDITABLE_FILE_MODEL = "gpt-5-5-thinking"
 EDITABLE_FILE_THINKING_EFFORT = "extended"
-EDITABLE_FILE_TIMEOUT_SECS = 1200.0
 EDITABLE_FILE_POLL_INTERVAL_SECS = 5.0
 EDITABLE_FILE_CLIENT_VERSION = "prod-bede35f9dcd856d080e012478f0c1031faa2588e"
 EDITABLE_FILE_CLIENT_BUILD_NUMBER = "6631702"
@@ -1496,7 +1494,8 @@ class OpenAIBackendAPI:
             base64_images: list[str] | None,
             prompt: str,
             output_dir: str | Path = EDITABLE_FILE_PPT_OUTPUT_DIR,
-            timeout_secs: float = EDITABLE_FILE_TIMEOUT_SECS,
+            *,
+            timeout_secs: float,
             poll_interval_secs: float = EDITABLE_FILE_POLL_INTERVAL_SECS,
     ) -> EditableFileExportResult:
         return self._export_editable_file_zip(
@@ -1518,7 +1517,8 @@ class OpenAIBackendAPI:
             base64_images: list[str],
             prompt: str,
             output_dir: str | Path = EDITABLE_FILE_PSD_OUTPUT_DIR,
-            timeout_secs: float = EDITABLE_FILE_TIMEOUT_SECS,
+            *,
+            timeout_secs: float,
             poll_interval_secs: float = EDITABLE_FILE_POLL_INTERVAL_SECS,
     ) -> EditableFileExportResult:
         if not base64_images:
@@ -1560,10 +1560,27 @@ class OpenAIBackendAPI:
         self.session.headers["OAI-Client-Build-Number"] = EDITABLE_FILE_CLIENT_BUILD_NUMBER
         output_path = Path(output_dir).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + max(0.001, float(timeout_secs))
         try:
-            uploaded = [self._upload_editable_base64_image(item, index) for index, item in enumerate(base64_images, start=1)]
-            conduit_token = self._prepare_editable_conversation(prompt, [item["mime_type"] for item in uploaded])
-            conversation_id = self._run_editable_conversation(prompt, uploaded, conduit_token)
+            uploaded = [
+                self._upload_editable_base64_image(
+                    item,
+                    index,
+                    deadline=deadline,
+                )
+                for index, item in enumerate(base64_images, start=1)
+            ]
+            conduit_token = self._prepare_editable_conversation(
+                prompt,
+                [item["mime_type"] for item in uploaded],
+                deadline=deadline,
+            )
+            conversation_id = self._run_editable_conversation(
+                prompt,
+                uploaded,
+                conduit_token,
+                deadline=deadline,
+            )
             artifacts = self._wait_editable_output_artifacts(
                 conversation_id,
                 primary_label,
@@ -1573,15 +1590,20 @@ class OpenAIBackendAPI:
                 export_file_re,
                 timeout_secs,
                 poll_interval_secs,
+                deadline=deadline,
             )
-            downloaded = [self._download_editable_artifact(
-                conversation_id,
-                item,
-                output_path,
-                primary_mime_types,
-                primary_mime_keywords,
-                primary_default_extension,
-            ) for item in artifacts]
+            downloaded = [
+                self._download_editable_artifact(
+                    conversation_id,
+                    item,
+                    output_path,
+                    primary_mime_types,
+                    primary_mime_keywords,
+                    primary_default_extension,
+                    deadline=deadline,
+                )
+                for item in artifacts
+            ]
             primary_path = next((item for item in downloaded if item.suffix.lower() in primary_suffixes), None)
             zip_path = next((item for item in downloaded if item.suffix.lower() == ".zip"), None)
             if not primary_path or not zip_path:
@@ -1593,7 +1615,23 @@ class OpenAIBackendAPI:
         except UpstreamHTTPError as exc:
             self._raise_editable_http_failure(exc, "editable_export_http_failure")
 
-    def _upload_editable_base64_image(self, base64_image: str, index: int) -> Dict[str, Any]:
+    @classmethod
+    def _editable_request_timeout(
+            cls,
+            deadline: float | None,
+            maximum: float,
+    ) -> float:
+        if deadline is None:
+            return maximum
+        return min(maximum, cls._remaining_timeout(deadline, "editable file task timed out"))
+
+    def _upload_editable_base64_image(
+            self,
+            base64_image: str,
+            index: int,
+            *,
+            deadline: float | None = None,
+    ) -> Dict[str, Any]:
         data, file_name, mime_type, width, height = self._decode_editable_base64_image(base64_image, index)
         path = "/backend-api/files"
         response = self.session.post(
@@ -1608,7 +1646,7 @@ class OpenAIBackendAPI:
                 "store_in_library": True,
                 "library_persistence_mode": "opportunistic",
             },
-            timeout=60,
+            timeout=self._editable_request_timeout(deadline, 60),
         )
         ensure_ok(response, path)
         payload = response.json()
@@ -1629,7 +1667,7 @@ class OpenAIBackendAPI:
                 "Accept-Language": "en-US,en;q=0.8",
             }),
             data=data,
-            timeout=120,
+            timeout=self._editable_request_timeout(deadline, 120),
         )
         ensure_ok(response, "image_upload", credential_scope="signed_asset")
         path = f"/backend-api/files/{file_id}/uploaded"
@@ -1637,7 +1675,7 @@ class OpenAIBackendAPI:
             self.base_url + path,
             headers=self._headers(path, {"Accept": "*/*", "Content-Type": "application/json"}),
             data="{}",
-            timeout=60,
+            timeout=self._editable_request_timeout(deadline, 60),
         )
         ensure_ok(response, path)
         return {
@@ -1668,7 +1706,13 @@ class OpenAIBackendAPI:
         extension = mimetypes.guess_extension(mime_type) or ".png"
         return data, f"image_{index}{extension}", mime_type, width, height
 
-    def _prepare_editable_conversation(self, prompt: str, attachment_mime_types: list[str]) -> str:
+    def _prepare_editable_conversation(
+            self,
+            prompt: str,
+            attachment_mime_types: list[str],
+            *,
+            deadline: float | None = None,
+    ) -> str:
         path = "/backend-api/f/conversation/prepare"
         payload: Dict[str, Any] = {
             "action": "next",
@@ -1692,7 +1736,7 @@ class OpenAIBackendAPI:
             self.base_url + path,
             headers=self._headers(path, {"Accept": "*/*", "Content-Type": "application/json", "X-Conduit-Token": "no-token"}),
             json=payload,
-            timeout=60,
+            timeout=self._editable_request_timeout(deadline, 60),
         )
         ensure_ok(response, path)
         conduit_token = str(response.json().get("conduit_token") or "")
@@ -1700,9 +1744,20 @@ class OpenAIBackendAPI:
             raise RuntimeError(f"missing conduit_token: {response.text}")
         return conduit_token
 
-    def _run_editable_conversation(self, prompt: str, uploaded: list[Dict[str, Any]], conduit_token: str) -> str:
-        self._bootstrap()
-        requirements = self._get_chat_requirements()
+    def _run_editable_conversation(
+            self,
+            prompt: str,
+            uploaded: list[Dict[str, Any]],
+            conduit_token: str,
+            *,
+            deadline: float | None = None,
+    ) -> str:
+        self._bootstrap(timeout_secs=self._editable_request_timeout(deadline, 30))
+        requirements = self._get_chat_requirements(
+            timeout_secs=self._editable_request_timeout(deadline, 30),
+            deadline=deadline,
+            timeout_message="editable file task timed out",
+        )
         message: Dict[str, Any] = {"id": new_uuid(), "author": {"role": "user"}, "create_time": time.time()}
         if uploaded:
             parts = [{
@@ -1765,7 +1820,7 @@ class OpenAIBackendAPI:
                 "force_parallel_switch": "auto",
                 "thinking_effort": EDITABLE_FILE_THINKING_EFFORT,
             },
-            timeout=300,
+            timeout=self._editable_request_timeout(deadline, 300),
             stream=True,
         )
         try:
@@ -1776,6 +1831,7 @@ class OpenAIBackendAPI:
         conversation_id = ""
         try:
             for payload in iter_sse_payloads(response):
+                self._editable_request_timeout(deadline, 300)
                 if payload == "[DONE]":
                     break
                 try:
@@ -1802,14 +1858,21 @@ class OpenAIBackendAPI:
             export_file_re: re.Pattern[str],
             timeout_secs: float,
             poll_interval_secs: float,
+            *,
+            deadline: float | None = None,
     ) -> list[EditableFileArtifact]:
-        deadline = time.time() + timeout_secs
-        while time.time() < deadline:
+        poll_deadline = deadline or (time.monotonic() + timeout_secs)
+        while time.monotonic() < poll_deadline:
             try:
-                conversation = self._get_editable_conversation_detail(conversation_id)
+                conversation = self._get_editable_conversation_detail(
+                    conversation_id,
+                    deadline=poll_deadline,
+                )
             except UpstreamHTTPError as exc:
                 if exc.status_code in {404, 409, 423, 429, 500, 502, 503, 504}:
-                    time.sleep(poll_interval_secs)
+                    remaining = poll_deadline - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(min(poll_interval_secs, remaining))
                     continue
                 self._raise_editable_http_failure(exc, "editable_poll_http_failure")
             targeted = self._pick_editable_target_artifacts(
@@ -1825,15 +1888,26 @@ class OpenAIBackendAPI:
                 return targeted
             if failure is not None and failure.code != "upstream_text_reply":
                 self._raise_editable_failure(failure, "editable_poll_failure")
-            time.sleep(poll_interval_secs)
+            remaining = poll_deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(poll_interval_secs, remaining))
         self._raise_editable_failure(
             image_failure("image_poll_timeout"),
             "editable_poll_timeout",
         )
 
-    def _get_editable_conversation_detail(self, conversation_id: str) -> Dict[str, Any]:
+    def _get_editable_conversation_detail(
+            self,
+            conversation_id: str,
+            *,
+            deadline: float | None = None,
+    ) -> Dict[str, Any]:
         path = f"/backend-api/conversation/{conversation_id}"
-        response = self.session.get(self.base_url + path, headers=self._editable_conversation_document_headers(path, conversation_id), timeout=60)
+        response = self.session.get(
+            self.base_url + path,
+            headers=self._editable_conversation_document_headers(path, conversation_id),
+            timeout=self._editable_request_timeout(deadline, 60),
+        )
         ensure_ok(response, path)
         return response.json()
 
@@ -1938,14 +2012,23 @@ class OpenAIBackendAPI:
             primary_mime_types: set[str],
             primary_mime_keywords: tuple[str, ...],
             primary_default_extension: str,
+            *,
+            deadline: float | None = None,
     ) -> Path:
-        download_url = self._resolve_editable_download_url(conversation_id, artifact)
+        download_url = self._resolve_editable_download_url(
+            conversation_id,
+            artifact,
+            deadline=deadline,
+        )
         if not download_url:
             self._raise_editable_failure(
                 image_failure("image_download_failed"),
                 "editable_download_url_missing",
             )
-        response = self.session.get(download_url, timeout=300)
+        response = self.session.get(
+            download_url,
+            timeout=self._editable_request_timeout(deadline, 300),
+        )
         try:
             ensure_ok(response, "artifact_download", credential_scope="signed_asset")
         except UpstreamHTTPError as exc:
@@ -1959,7 +2042,13 @@ class OpenAIBackendAPI:
         target_path.write_bytes(response.content)
         return target_path
 
-    def _resolve_editable_download_url(self, conversation_id: str, artifact: EditableFileArtifact) -> str:
+    def _resolve_editable_download_url(
+            self,
+            conversation_id: str,
+            artifact: EditableFileArtifact,
+            *,
+            deadline: float | None = None,
+    ) -> str:
         ids: list[str] = []
         for item in (artifact.attachment_id, artifact.file_id):
             if item and item not in ids:
@@ -1970,7 +2059,7 @@ class OpenAIBackendAPI:
                 self.base_url + path,
                 headers=self._editable_download_headers(path, conversation_id, "/backend-api/conversation/{conversation_id}/interpreter/download"),
                 params={"message_id": artifact.message_id, "sandbox_path": artifact.sandbox_path},
-                timeout=60,
+                timeout=self._editable_request_timeout(deadline, 60),
             )
             if url := self._editable_download_url_candidate(response, path):
                 return url
@@ -1979,7 +2068,7 @@ class OpenAIBackendAPI:
             response = self.session.get(
                 self.base_url + path,
                 headers=self._editable_download_headers(path, conversation_id, "/backend-api/conversation/{conversation_id}/attachment/{attachment_id}/download"),
-                timeout=60,
+                timeout=self._editable_request_timeout(deadline, 60),
             )
             if url := self._editable_download_url_candidate(response, path):
                 return url
@@ -1989,7 +2078,7 @@ class OpenAIBackendAPI:
                 self.base_url + path,
                 headers=self._editable_download_headers(path, conversation_id, "/backend-api/files/download/{file_id}"),
                 params={"post_id": "", "inline": "false"},
-                timeout=60,
+                timeout=self._editable_request_timeout(deadline, 60),
             )
             if url := self._editable_download_url_candidate(response, path):
                 return url
@@ -1998,7 +2087,7 @@ class OpenAIBackendAPI:
             response = self.session.get(
                 self.base_url + path,
                 headers=self._editable_download_headers(path, conversation_id, "/backend-api/files/download/{file_id}"),
-                timeout=60,
+                timeout=self._editable_request_timeout(deadline, 60),
             )
             if url := self._editable_download_url_candidate(response, path):
                 return url
@@ -2248,16 +2337,48 @@ class OpenAIBackendAPI:
                 values.append(path)
         return values
 
-    def search(self, prompt: str, model: str = SEARCH_MODEL, timeout_secs: float = SEARCH_TIMEOUT_SECS,
-               poll_interval_secs: float = SEARCH_POLL_INTERVAL_SECS) -> Dict[str, Any]:
+    def search(
+            self,
+            prompt: str,
+            model: str = SEARCH_MODEL,
+            *,
+            timeout_secs: float,
+            poll_interval_secs: float = SEARCH_POLL_INTERVAL_SECS,
+    ) -> Dict[str, Any]:
         if not self.access_token:
             raise RuntimeError("access_token is required for search")
-        conduit_token = self._prepare_search_conversation(prompt, model)
-        self._bootstrap()
-        conversation_id = self._run_search_conversation(prompt, conduit_token, model)
-        return self._wait_search_result(conversation_id, timeout_secs, poll_interval_secs)
+        deadline = time.monotonic() + max(0.001, float(timeout_secs))
+        conduit_token = self._prepare_search_conversation(
+            prompt,
+            model,
+            self._remaining_search_timeout(deadline),
+        )
+        self._bootstrap(timeout_secs=self._remaining_search_timeout(deadline))
+        conversation_id = self._run_search_conversation(
+            prompt,
+            conduit_token,
+            model,
+            deadline,
+        )
+        return self._wait_search_result(conversation_id, deadline, poll_interval_secs)
 
-    def _prepare_search_conversation(self, prompt: str, model: str) -> str:
+    @staticmethod
+    def _remaining_timeout(deadline: float, message: str) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(message)
+        return max(0.001, remaining)
+
+    @classmethod
+    def _remaining_search_timeout(cls, deadline: float) -> float:
+        return cls._remaining_timeout(deadline, "web search timed out")
+
+    def _prepare_search_conversation(
+            self,
+            prompt: str,
+            model: str,
+            timeout_secs: float,
+    ) -> str:
         path = "/backend-api/f/conversation/prepare"
         response = self.session.post(
             self.base_url + path,
@@ -2277,7 +2398,7 @@ class OpenAIBackendAPI:
                 "supported_encodings": ["v1"],
                 "client_contextual_info": {"app_name": "chatgpt.com"},
             },
-            timeout=60,
+            timeout=timeout_secs,
         )
         ensure_ok(response, path)
         token = str(response.json().get("conduit_token") or "")
@@ -2285,8 +2406,17 @@ class OpenAIBackendAPI:
             raise RuntimeError("missing conduit_token")
         return token
 
-    def _run_search_conversation(self, prompt: str, conduit_token: str, model: str) -> str:
-        requirements = self._get_chat_requirements()
+    def _run_search_conversation(
+            self,
+            prompt: str,
+            conduit_token: str,
+            model: str,
+            deadline: float,
+    ) -> str:
+        requirements = self._get_chat_requirements(
+            timeout_secs=self._remaining_search_timeout(deadline),
+            deadline=deadline,
+        )
         path = "/backend-api/f/conversation"
         response = self.session.post(
             self.base_url + path,
@@ -2322,13 +2452,14 @@ class OpenAIBackendAPI:
                 "paragen_cot_summary_display_override": "allow",
                 "force_parallel_switch": "auto",
             },
-            timeout=300,
+            timeout=self._remaining_search_timeout(deadline),
             stream=True,
         )
         ensure_ok(response, path)
         conversation_id = ""
         try:
             for payload in iter_sse_payloads(response):
+                self._remaining_search_timeout(deadline)
                 conversation_id = conversation_id or self._find_search_value(payload, "conversation_id")
                 if payload == "[DONE]":
                     break
@@ -2338,14 +2469,19 @@ class OpenAIBackendAPI:
             raise RuntimeError("conversation_id not found in stream")
         return conversation_id
 
-    def _wait_search_result(self, conversation_id: str, timeout_secs: float, poll_interval_secs: float) -> Dict[str, Any]:
-        deadline = time.time() + timeout_secs
+    def _wait_search_result(self, conversation_id: str, deadline: float, poll_interval_secs: float) -> Dict[str, Any]:
         last_result: Dict[str, Any] | None = None
         last_answer = ""
         stable_hits = 0
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             try:
-                last_result = self._extract_search_result(conversation_id, self._get_search_conversation(conversation_id))
+                last_result = self._extract_search_result(
+                    conversation_id,
+                    self._get_search_conversation(
+                        conversation_id,
+                        self._remaining_search_timeout(deadline),
+                    ),
+                )
             except UpstreamHTTPError as exc:
                 if exc.status_code not in {404, 409, 423, 429, 500, 502, 503, 504}:
                     raise
@@ -2357,30 +2493,59 @@ class OpenAIBackendAPI:
                 last_answer = answer
                 if stable_hits >= 2:
                     return last_result
-            time.sleep(poll_interval_secs)
-        if last_result:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(poll_interval_secs, remaining))
+        if last_result and last_result.get("answer"):
             return last_result
-        raise RuntimeError(f"timed out waiting for search result: {conversation_id}")
+        raise TimeoutError("web search timed out")
 
-    def _get_search_conversation(self, conversation_id: str) -> Dict[str, Any]:
+    def _get_search_conversation(
+            self,
+            conversation_id: str,
+            timeout_secs: float,
+    ) -> Dict[str, Any]:
         path = f"/backend-api/conversation/{conversation_id}"
         headers = self._headers(path, {"Accept": "*/*"})
         headers["Referer"] = f"{self.base_url}/c/{conversation_id}"
         headers["X-OpenAI-Target-Route"] = "/backend-api/conversation/{conversation_id}"
-        response = self.session.get(self.base_url + path, headers=headers, timeout=60)
+        response = self.session.get(
+            self.base_url + path,
+            headers=headers,
+            timeout=timeout_secs,
+        )
         ensure_ok(response, path)
         return response.json()
 
     def _extract_search_result(self, conversation_id: str, conversation: Dict[str, Any]) -> Dict[str, Any]:
-        messages = []
+        candidates: list[tuple[bool, float, Dict[str, Any], str]] = []
         for node in (conversation.get("mapping") or {}).values():
             message = (node or {}).get("message") or {}
-            if ((message.get("author") or {}).get("role") or "") == "assistant":
-                messages.append(message)
-        message = max(messages, key=lambda item: float(item.get("create_time") or 0.0)) if messages else {}
+            if ((message.get("author") or {}).get("role") or "") != "assistant":
+                continue
+            content = message.get("content") if isinstance(message.get("content"), dict) else {}
+            content_type = str(content.get("content_type") or "").strip().lower()
+            recipient = str(message.get("recipient") or "").strip().lower()
+            if content_type in {"code", "thoughts", "reasoning_recap"} or recipient not in {"", "all"}:
+                continue
+            answer = self._search_message_text(message)
+            if not answer:
+                continue
+            metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+            finish_details = metadata.get("finish_details") if isinstance(metadata.get("finish_details"), dict) else {}
+            terminal = (
+                message.get("end_turn") is True
+                or metadata.get("is_complete") is True
+                or str(finish_details.get("type") or "").strip() in SEARCH_DONE_STATUS
+            )
+            candidates.append((terminal, float(message.get("create_time") or 0.0), message, answer))
+        if candidates:
+            _, _, message, answer = max(candidates, key=lambda item: (item[0], item[1]))
+        else:
+            message = {}
+            answer = ""
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
         finish_details = metadata.get("finish_details") if isinstance(metadata.get("finish_details"), dict) else {}
-        answer = self._search_message_text(message)
         image_groups = self._collect_search_image_groups(message)
         sources = self._extract_search_sources(message)
         for url in SEARCH_URL_RE.findall(answer):
@@ -2691,11 +2856,11 @@ class OpenAIBackendAPI:
     ) -> tuple[list[str], list[str]]:
         """Poll the conversation document until image file ids appear or budget runs out.
 
-        - Sleeps image_poll_initial_wait_secs first (default 10s, +jitter). ChatGPT
+        - Sleeps image_poll_initial_wait_secs first (default 5s, +jitter). ChatGPT
           image generation takes ~30s; polling immediately wastes requests and trips
           a transient 429 the upstream returns within ~200ms of the SSE stream
           closing (the conversation document is not yet committed).
-        - Subsequent polls are image_poll_interval_secs apart (default 10s).
+        - Subsequent polls are image_poll_interval_secs apart (default 5s).
         - Failures marked retryable by the canonical image-failure policy back
           off exponentially (capped at 16s, +jitter), honoring Retry-After.
         - All sleeps stay within timeout_secs; on exhaustion raises ImagePollTimeoutError.
@@ -3475,20 +3640,34 @@ class OpenAIBackendAPI:
         finally:
             response.close()
 
-    def _bootstrap(self) -> None:
+    def _bootstrap(self, timeout_secs: float = 30.0) -> None:
         """预热首页，并提取 PoW 相关脚本引用。"""
         response = self.session.get(
             self.base_url + "/",
             headers=self._bootstrap_headers(),
-            timeout=30,
+            timeout=timeout_secs,
         )
         ensure_ok(response, "bootstrap", credential_scope="public")
         self.pow_script_sources, self.pow_data_build = parse_pow_resources(response.text)
         if not self.pow_script_sources:
             self.pow_script_sources = [DEFAULT_POW_SCRIPT]
 
-    def _get_chat_requirements(self) -> ChatRequirements:
+    def _get_chat_requirements(
+            self,
+            timeout_secs: float = 30.0,
+            *,
+            deadline: float | None = None,
+            timeout_message: str = "web search timed out",
+    ) -> ChatRequirements:
         """获取当前模式对话所需的 sentinel token（prepare + finalize 两步流程）。"""
+        def request_timeout() -> float:
+            if deadline is None:
+                return timeout_secs
+            return min(
+                timeout_secs,
+                self._remaining_timeout(deadline, timeout_message),
+            )
+
         base = "/backend-api/sentinel/chat-requirements" if self.access_token else "/backend-anon/sentinel/chat-requirements"
         p_token = build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)
 
@@ -3497,7 +3676,7 @@ class OpenAIBackendAPI:
             self.base_url + prepare_path,
             headers=self._headers(prepare_path, {"Content-Type": "application/json"}),
             json={"p": p_token},
-            timeout=30,
+            timeout=request_timeout(),
         )
         ensure_ok(response, "chat_requirements_prepare")
         prepare_data = response.json()
@@ -3530,7 +3709,7 @@ class OpenAIBackendAPI:
                 "proof_token": proof_token,
                 "turnstile_token": turnstile_token,
             },
-            timeout=30,
+            timeout=request_timeout(),
         )
         ensure_ok(response, "chat_requirements_finalize")
         data = response.json()

@@ -1,5 +1,7 @@
 import apiClient from './client'
 
+const SEARCH_TRANSPORT_TIMEOUT_MS = 630_000
+
 export interface OpenAIV1SearchSource {
   title: string
   url: string
@@ -35,5 +37,9 @@ export interface OpenAIV1ChatMessage {
 }
 
 export const openaiV1Api = {
-  search: (prompt: string) => apiClient.post<{ prompt: string }, OpenAIV1SearchResult>('/v1/search', { prompt }),
+  search: (prompt: string) => apiClient.post<{ prompt: string }, OpenAIV1SearchResult>(
+    '/v1/search',
+    { prompt },
+    { timeout: SEARCH_TRANSPORT_TIMEOUT_MS },
+  ),
 }

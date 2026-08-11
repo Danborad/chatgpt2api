@@ -38,7 +38,7 @@
 
 图片任务是独立的异步资源。任务存储状态为 `queued`、`running`、`success` 或 `error`；`/api/image-tasks` 再根据结果数量和失败分类投影为 `success`、`partial_success`、`failed` 或 `text_review`。`text_review` 表示上游返回可展示文本，而不是图片生成失败后再由前端推断出的状态。
 
-可编辑文件任务同样是独立的异步资源，但不复用图片任务字段。`/v1/editable-file-tasks` 直接返回 `queued`、`running`、`success` 或 `error`；成功结果包含主文件和 ZIP 下载地址，Studio 只按该投影更新会话状态与下载操作。任务的创建、查询和删除按用户密钥隔离；成功发布后的 `/files/...` 是与图片一致的公开资产地址，只校验存储路径和文件存在性，不反查任务记录。
+可编辑文件任务同样是独立的异步资源，但不复用图片任务字段。`/v1/editable-file-tasks` 直接返回 `queued`、`running`、`success` 或 `error`；成功结果包含主文件和 ZIP 下载地址，Studio 只按该投影更新会话状态与下载操作。任务的创建、查询和删除按用户密钥隔离；成功发布后的 `/files/...` 是与图片一致的公开资产地址，只校验存储路径和文件存在性，不反查任务记录。Editable File Task Service 持有固定 20 分钟总时限，一次上游准备、生成、轮询和下载共享同一截止时间；前端轮询不拥有该时限。
 
 ## 页面生命周期
 

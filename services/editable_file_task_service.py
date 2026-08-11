@@ -52,6 +52,7 @@ TASK_STATUS_PRESENTATION = {
     },
 }
 EDITABLE_FILE_PLAN_TYPES = ("Plus", "Team", "Pro", "Enterprise")
+EDITABLE_FILE_TIMEOUT_SECS = 1200.0
 EDITABLE_FILE_ROOT = DATA_DIR / "files"
 EDITABLE_FILE_TASK_ID_MAX_LENGTH = 160
 EDITABLE_FILE_TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -305,7 +306,13 @@ class EditableFileTaskService:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir)
             with OpenAIBackendAPI(token) as backend:
-                result = backend.export_psd_zip(base64_images, prompt, staging_dir) if kind == "psd" else backend.export_ppt_zip(base64_images, prompt, staging_dir)
+                export = backend.export_psd_zip if kind == "psd" else backend.export_ppt_zip
+                result = export(
+                    base64_images,
+                    prompt,
+                    staging_dir,
+                    timeout_secs=EDITABLE_FILE_TIMEOUT_SECS,
+                )
             account_service.mark_text_used(token)
             primary_path, zip_path = self._publish_files(
                 stored_task,

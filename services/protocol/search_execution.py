@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 from services.account_service import account_service
@@ -41,9 +42,11 @@ def execute_search(
     query: str,
     *,
     backend_factory: Callable[[str], Any],
+    timeout_secs: float,
     decorate: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Execute one search and switch Upstream Account once on auth rejection."""
+    deadline = time.monotonic() + max(0.001, float(timeout_secs))
     attempted_tokens: set[str] = set()
     auth_failures = 0
     last_auth_error: Exception | None = None
@@ -58,8 +61,11 @@ def execute_search(
         account = _account_snapshot(access_token)
 
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("web search timed out")
             with backend_factory(access_token) as backend:
-                result = backend.search(query)
+                result = backend.search(query, timeout_secs=remaining)
         except Exception as exc:
             if not _is_account_auth_failure(exc):
                 raise
