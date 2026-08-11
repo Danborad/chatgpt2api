@@ -71,59 +71,98 @@
         </div>
       </div>
 
-      <StudioMessageList
-        ref="messageListRef"
-        :conversation="activeConversation"
-        :conversations-count="conversations.length"
-        :task-by-id="taskById"
-        :file-task-by-id="fileTaskById"
-        :fullscreen="isFullscreen"
-        @create="createConversation"
-        @open-history="openMobileHistory"
-        @toggle-fullscreen="toggleFullscreen"
-        @retry="retryMessage"
-        @edit="editMessage"
-        @resend="resendMessage"
-        @resume-image-task="resumeImageTask"
-        @retry-assistant="retryAssistantMessage"
-        @delete-message="deleteMessage"
-        @copy-message="copyText"
-        @preview="openPreview"
-        @reference-image="referenceGeneratedImage"
-        @inpaint-image="openInpaintModal"
-        @compare-image="openImageCompare"
-      />
+      <div ref="studioContentRef" class="studio-content-layout">
+        <div class="studio-conversation-column">
+          <StudioMessageList
+            ref="messageListRef"
+            :conversation="activeConversation"
+            :conversations-count="conversations.length"
+            :task-by-id="taskById"
+            :file-task-by-id="fileTaskById"
+            :fullscreen="isFullscreen"
+            @create="createConversation"
+            @open-history="openMobileHistory"
+            @toggle-fullscreen="toggleFullscreen"
+            @retry="retryMessage"
+            @edit="editMessage"
+            @resend="resendMessage"
+            @resume-image-task="resumeImageTask"
+            @retry-assistant="retryAssistantMessage"
+            @delete-message="deleteMessage"
+            @copy-message="copyText"
+            @preview="openPreview"
+            @reference-image="referenceGeneratedImage"
+            @inpaint-image="openInpaintModal"
+            @compare-image="openImageCompare"
+            @open-search-sources="openSearchSourcePanel"
+          />
 
-      <StudioComposer
-        v-model:mode="composeMode"
-        v-model:text="composerText"
-        v-model:chat-model="chatModel"
-        v-model:chat-reasoning-effort="chatReasoningEffort"
-        v-model:file-kind="fileKind"
-        :image-form="imageForm"
-        :chat-model-options="chatModelOptions"
-        :image-model-options="imageModelOptions"
-        :image-high-resolution-enabled="imageHighResolutionEnabled"
-        :references="referenceRuntime.references.value"
-        :is-sending="isSending"
-        :is-streaming="isStreaming"
-        :is-editing="Boolean(editingMessageId)"
-        @update:image-model="imageForm.model = $event"
-        @update:image-size="imageForm.size = $event"
-        @update:image-quality="imageForm.quality = $event"
-        @update:image-count="imageForm.n = $event"
-        @submit="sendMessage"
-        @stop="stopStreaming"
-        @cancel-edit="cancelMessageEdit"
-        @add-files="appendFiles"
-        @remove-reference="referenceRuntime.remove"
-        @clear-references="referenceRuntime.clear"
-        @preview-reference="referenceRuntime.open"
-        @open-prompts="openPromptPicker"
-        @open-search-skill="isSearchSkillOpen = true"
-        @open-recent-file-tasks="isRecentFileTasksOpen = true"
-      />
+          <StudioComposer
+            v-model:mode="composeMode"
+            v-model:text="composerText"
+            v-model:chat-model="chatModel"
+            v-model:chat-reasoning-effort="chatReasoningEffort"
+            v-model:file-kind="fileKind"
+            :image-form="imageForm"
+            :chat-model-options="chatModelOptions"
+            :image-model-options="imageModelOptions"
+            :image-high-resolution-enabled="imageHighResolutionEnabled"
+            :references="referenceRuntime.references.value"
+            :is-sending="isSending"
+            :is-streaming="isStreaming"
+            :is-editing="Boolean(editingMessageId)"
+            @update:image-model="imageForm.model = $event"
+            @update:image-size="imageForm.size = $event"
+            @update:image-quality="imageForm.quality = $event"
+            @update:image-count="imageForm.n = $event"
+            @submit="sendMessage"
+            @stop="stopStreaming"
+            @cancel-edit="cancelMessageEdit"
+            @add-files="appendFiles"
+            @remove-reference="referenceRuntime.remove"
+            @clear-references="referenceRuntime.clear"
+            @preview-reference="referenceRuntime.open"
+            @open-prompts="openPromptPicker"
+            @open-search-skill="isSearchSkillOpen = true"
+            @open-recent-file-tasks="isRecentFileTasksOpen = true"
+          />
+        </div>
+
+        <Transition name="studio-search-sources">
+          <aside
+            v-if="activeSearchSourceMessage && isSearchSourceDocked"
+            class="studio-search-sources-dock"
+            aria-label="参考来源"
+          >
+            <div class="studio-search-sources-dock-inner">
+              <StudioSearchSourcesPanel
+                :message="activeSearchSourceMessage"
+                :highlighted-source-index="highlightedSearchSourceIndex"
+                :highlight-revision="searchSourceHighlightRevision"
+                @close="closeSearchSourcePanel"
+              />
+            </div>
+          </aside>
+        </Transition>
+      </div>
     </main>
+
+    <DrawerShell
+      :open="Boolean(activeSearchSourceMessage) && !isSearchSourceDocked"
+      max-width="22rem"
+      :z-index="220"
+      aria-label="参考来源"
+      bare
+      @close="closeSearchSourcePanel"
+    >
+      <StudioSearchSourcesPanel
+        v-if="activeSearchSourceMessage"
+        :message="activeSearchSourceMessage"
+        :highlighted-source-index="highlightedSearchSourceIndex"
+        :highlight-revision="searchSourceHighlightRevision"
+        @close="closeSearchSourcePanel"
+      />
+    </DrawerShell>
 
     <StudioMobileHistory
       :open="isMobileHistoryOpen"
@@ -173,13 +212,14 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { Button } from 'nanocat-ui'
-import { computed, defineAsyncComponent, onBeforeUnmount, ref } from 'vue'
+import { Button, DrawerShell } from 'nanocat-ui'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 import { usePageRuntime } from '@/composables/usePageRuntime'
 import { preloadPromptLibrary } from '@/composables/usePromptLibraryRuntime'
 import StudioPromptPicker from '@/components/studio/StudioPromptPicker.vue'
+import StudioSearchSourcesPanel from '@/components/studio/StudioSearchSourcesPanel.vue'
 import { writeClipboardText } from '@/lib/clipboard'
 import { downloadUrlAsFile } from '@/lib/downloads'
 import {
@@ -255,6 +295,14 @@ const inpaintTarget = ref<{
   source: StudioImageCompareSource
 } | null>(null)
 const messageListRef = ref<StudioMessageListScroller | null>(null)
+const studioContentRef = ref<HTMLElement | null>(null)
+const searchPanelMessageId = ref('')
+const highlightedSearchSourceIndex = ref<number | null>(null)
+const searchSourceHighlightRevision = ref(0)
+const isSearchSourceDocked = ref(false)
+const SEARCH_SOURCE_DOCK_MIN_WIDTH_PX = 860
+let searchSourceHighlightTimer: number | null = null
+let searchSourceLayoutObserver: ResizeObserver | null = null
 const scrollRuntime = useStudioScrollRuntime({
   pageRuntime,
   messageListRef,
@@ -289,6 +337,12 @@ const activeConversation = computed(() => {
   return conversationLookup.value.byId.get(activeConversationId.value)
     || conversations.value[0]
     || null
+})
+const activeSearchSourceMessage = computed(() => {
+  if (!searchPanelMessageId.value) return null
+  return activeConversation.value?.messages.find((message) => (
+    message.id === searchPanelMessageId.value && Boolean(message.searchSources?.length)
+  )) || null
 })
 const imageTaskRuntime = useStudioImageTaskRuntime({
   pageRuntime,
@@ -347,6 +401,60 @@ const activeHeaderSubtitle = computed(() => {
   const count = activeConversation.value?.messages.length || 0
   return count ? `${count} 条消息` : '准备就绪'
 })
+
+function clearSearchSourceHighlight() {
+  highlightedSearchSourceIndex.value = null
+  if (searchSourceHighlightTimer !== null) {
+    window.clearTimeout(searchSourceHighlightTimer)
+    searchSourceHighlightTimer = null
+  }
+}
+
+function closeSearchSourcePanel() {
+  searchPanelMessageId.value = ''
+  clearSearchSourceHighlight()
+}
+
+function openSearchSourcePanel(messageId: string, sourceIndex?: number) {
+  const message = activeConversation.value?.messages.find((candidate) => candidate.id === messageId)
+  const sourceCount = message?.searchSources?.length || 0
+  if (!message || !sourceCount) return
+
+  searchPanelMessageId.value = message.id
+  clearSearchSourceHighlight()
+  if (sourceIndex === undefined || sourceIndex < 0 || sourceIndex >= sourceCount) return
+
+  highlightedSearchSourceIndex.value = sourceIndex
+  searchSourceHighlightRevision.value += 1
+  searchSourceHighlightTimer = window.setTimeout(() => {
+    highlightedSearchSourceIndex.value = null
+    searchSourceHighlightTimer = null
+  }, 1600)
+}
+
+function updateSearchSourceLayout(width: number) {
+  isSearchSourceDocked.value = width >= SEARCH_SOURCE_DOCK_MIN_WIDTH_PX
+}
+
+function bindSearchSourceLayoutObserver() {
+  searchSourceLayoutObserver?.disconnect()
+  searchSourceLayoutObserver = null
+  const element = studioContentRef.value
+  if (!element) return
+
+  updateSearchSourceLayout(element.getBoundingClientRect().width)
+  if (typeof ResizeObserver === 'undefined') return
+  searchSourceLayoutObserver = new ResizeObserver(([entry]) => {
+    if (entry) updateSearchSourceLayout(entry.contentRect.width)
+  })
+  searchSourceLayoutObserver.observe(element)
+}
+
+watch(activeConversationId, closeSearchSourcePanel)
+watch(activeSearchSourceMessage, (message) => {
+  if (!message && searchPanelMessageId.value) closeSearchSourcePanel()
+})
+
 const messageRuntime = useStudioMessageRuntime({
   conversations,
   activeConversation,
@@ -689,6 +797,7 @@ function cancelScheduledScroll() {
 function stopTransientStudioUi() {
   layoutRuntime.stopSidebarResize()
   conversationSelectionRuntime.cancel()
+  closeSearchSourcePanel()
   isSearchSkillOpen.value = false
   isRecentFileTasksOpen.value = false
   cancelScheduledScroll()
@@ -783,7 +892,13 @@ pageRuntime.onShow(() => {
   activateStudio()
 })
 
+onMounted(() => {
+  bindSearchSourceLayoutObserver()
+})
+
 onBeforeUnmount(() => {
+  searchSourceLayoutObserver?.disconnect()
+  searchSourceLayoutObserver = null
   disposeStudio()
 })
 </script>
@@ -895,6 +1010,67 @@ onBeforeUnmount(() => {
   box-shadow: 0 16px 44px -36px rgba(15, 23, 42, 0.45);
 }
 
+.studio-content-layout {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.studio-conversation-column {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.studio-search-sources-dock {
+  display: flex;
+  width: 22rem;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 22rem;
+  justify-content: flex-end;
+  overflow: hidden;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+
+.studio-search-sources-dock-inner {
+  width: 22rem;
+  min-width: 22rem;
+  height: 100%;
+  min-height: 0;
+  flex: 0 0 22rem;
+}
+
+.studio-search-sources-enter-active,
+.studio-search-sources-leave-active {
+  transition: flex-basis 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: flex-basis;
+}
+
+.studio-search-sources-enter-active .studio-search-sources-dock-inner,
+.studio-search-sources-leave-active .studio-search-sources-dock-inner {
+  transition: opacity 160ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.studio-search-sources-enter-from,
+.studio-search-sources-leave-to {
+  flex-basis: 0;
+}
+
+.studio-search-sources-enter-from .studio-search-sources-dock-inner,
+.studio-search-sources-leave-to .studio-search-sources-dock-inner {
+  opacity: 0;
+  transform: translateX(0.75rem);
+}
+
 .chat-header-bar {
   display: flex;
   min-height: 3.5rem;
@@ -972,6 +1148,15 @@ onBeforeUnmount(() => {
     max-width: 42vw;
   }
 
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-search-sources-enter-active,
+  .studio-search-sources-leave-active,
+  .studio-search-sources-enter-active .studio-search-sources-dock-inner,
+  .studio-search-sources-leave-active .studio-search-sources-dock-inner {
+    transition: none;
+  }
 }
 
 </style>
