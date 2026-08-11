@@ -42,6 +42,7 @@
 
 ## 版本与文档
 
+- GitHub 发布 workflow 的 push 触发器只监听 `v*` 标签；不得因 `main` 推送启动。`pull_request` 与 `workflow_dispatch` 可以保留用于仅验证，但 Release、镜像与其他发布 job 必须显式限制为 `v*` 标签。
 - 用户可感知的功能、Interface 或行为变化更新 `CHANGELOG.md` 的 Unreleased；纯内部重构无需逐条记录。
 - 同一版本的 `CHANGELOG.md` 条目必须按 `[新增]`、`[优化]`、`[修复]` 的顺序分组，同类条目保持连续，不得交叉排列。
 - 当前文档只描述已验证行为。删除路由或功能时，同一修改删除对应的 current 文档内容。
