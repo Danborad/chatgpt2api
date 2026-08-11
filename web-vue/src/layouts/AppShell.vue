@@ -259,6 +259,9 @@
                   <Button
                     size="sm"
                     variant="outline"
+                    :root-class="hasNewVersion
+                      ? '!border-amber-400/70 !bg-amber-50 !text-amber-800 hover:!border-amber-500 hover:!bg-amber-100 hover:!text-amber-900 dark:!border-amber-500/60 dark:!bg-amber-950/35 dark:!text-amber-300 dark:hover:!border-amber-400 dark:hover:!bg-amber-950/55 dark:hover:!text-amber-200'
+                      : ''"
                     aria-label="查看版本更新"
                     @click="openUpdateDialog"
                   >
@@ -529,7 +532,7 @@
           </div>
           <p
             class="mt-1 text-base font-semibold"
-            :class="hasNewVersion ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'"
+            :class="hasNewVersion ? 'text-amber-800 dark:text-amber-300' : 'text-foreground'"
           >
             {{ latestVersionLabel }}
           </p>
@@ -1172,7 +1175,6 @@ function cycleThemeMode() {
 
 function openUpdateDialog() {
   isUpdateDialogOpen.value = true
-  void checkForUpdates(false)
 }
 
 function openReleasePage() {
