@@ -52,8 +52,11 @@ _MANAGED_TOP_LEVEL_FIELDS = (
     "refresh_account_interval_minute",
     "image_retention_hours",
     "log_retention_hours",
+    "console_request_timeout_secs",
     "image_poll_timeout_secs",
     "image_stream_timeout_secs",
+    "image_poll_initial_wait_secs",
+    "image_poll_interval_secs",
     "image_account_concurrency",
     "account_processing_concurrency",
     "image_account_retry_enabled",
@@ -238,8 +241,11 @@ _FIELD_SPECS: dict[str, dict[str, Any]] = {
     "refresh_account_interval_minute": _numeric_field_metadata("refresh_account_interval_minute"),
     "image_retention_hours": _numeric_field_metadata("image_retention_hours"),
     "log_retention_hours": _numeric_field_metadata("log_retention_hours"),
+    "console_request_timeout_secs": _numeric_field_metadata("console_request_timeout_secs"),
     "image_poll_timeout_secs": _numeric_field_metadata("image_poll_timeout_secs"),
     "image_stream_timeout_secs": _numeric_field_metadata("image_stream_timeout_secs"),
+    "image_poll_initial_wait_secs": _numeric_field_metadata("image_poll_initial_wait_secs"),
+    "image_poll_interval_secs": _numeric_field_metadata("image_poll_interval_secs"),
     "image_account_concurrency": _numeric_field_metadata("image_account_concurrency"),
     "account_processing_concurrency": _numeric_field_metadata("account_processing_concurrency"),
     "image_account_retry_enabled": _field_metadata(True),
@@ -311,6 +317,7 @@ class SettingsManagementService:
             canvas = settings.third_party_apps.infinite_canvas
             return PublicThirdPartyAppsView(
                 api_base_url=settings.base_url,
+                console_request_timeout_secs=settings.console_request_timeout_secs,
                 third_party_apps=PublicThirdPartyAppsSettings(
                     infinite_canvas=PublicInfiniteCanvasSettings(
                         enabled=canvas.enabled,
@@ -489,6 +496,10 @@ class SettingsManagementService:
                 "log_retention_hours",
                 effective.get("log_retention_hours"),
             ),
+            console_request_timeout_secs=normalize_integer_setting(
+                "console_request_timeout_secs",
+                effective.get("console_request_timeout_secs"),
+            ),
             image_poll_timeout_secs=normalize_integer_setting(
                 "image_poll_timeout_secs",
                 effective.get("image_poll_timeout_secs"),
@@ -496,6 +507,14 @@ class SettingsManagementService:
             image_stream_timeout_secs=normalize_integer_setting(
                 "image_stream_timeout_secs",
                 effective.get("image_stream_timeout_secs"),
+            ),
+            image_poll_initial_wait_secs=normalize_float_setting(
+                "image_poll_initial_wait_secs",
+                effective.get("image_poll_initial_wait_secs"),
+            ),
+            image_poll_interval_secs=normalize_float_setting(
+                "image_poll_interval_secs",
+                effective.get("image_poll_interval_secs"),
             ),
             image_account_concurrency=normalize_integer_setting(
                 "image_account_concurrency",

@@ -505,6 +505,14 @@ class ConfigStore:
         )
 
     @property
+    def console_request_timeout_secs(self) -> int:
+        self.reload_if_changed()
+        return normalize_integer_setting(
+            "console_request_timeout_secs",
+            self.data.get("console_request_timeout_secs"),
+        )
+
+    @property
     def image_poll_timeout_secs(self) -> int:
         self.reload_if_changed()
         return normalize_integer_setting(
@@ -527,20 +535,22 @@ class ConfigStore:
 
     @property
     def image_poll_interval_secs(self) -> float:
-        try:
-            return max(0.5, float(self.data.get("image_poll_interval_secs", 10.0)))
-        except (TypeError, ValueError):
-            return 10.0
+        self.reload_if_changed()
+        return normalize_float_setting(
+            "image_poll_interval_secs",
+            self.data.get("image_poll_interval_secs"),
+        )
 
     @property
     def image_poll_initial_wait_secs(self) -> float:
         """Image generation upstream takes ~30s; polling immediately wastes requests
-        and trips a transient 429. Default 10s gives the conversation document time
+        and trips a transient 429. Default 5s gives the conversation document time
         to commit before the first poll."""
-        try:
-            return max(0.0, float(self.data.get("image_poll_initial_wait_secs", 10.0)))
-        except (TypeError, ValueError):
-            return 10.0
+        self.reload_if_changed()
+        return normalize_float_setting(
+            "image_poll_initial_wait_secs",
+            self.data.get("image_poll_initial_wait_secs"),
+        )
 
     @property
     def image_account_concurrency(self) -> int:
@@ -689,6 +699,7 @@ class ConfigStore:
             data["image_retention_hours"] = self.image_retention_hours
             data["log_retention_hours"] = self.log_retention_hours
             data["image_min_free_mb"] = self.image_min_free_mb
+            data["console_request_timeout_secs"] = self.console_request_timeout_secs
             data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
             data["image_stream_timeout_secs"] = self.image_stream_timeout_secs
             data["image_poll_interval_secs"] = self.image_poll_interval_secs

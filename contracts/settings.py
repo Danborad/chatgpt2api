@@ -168,6 +168,7 @@ class PublicThirdPartyAppsSettings(_StrictModel):
 
 class PublicThirdPartyAppsView(_StrictModel):
     api_base_url: str = ""
+    console_request_timeout_secs: int = _numeric_field("console_request_timeout_secs")
     third_party_apps: PublicThirdPartyAppsSettings = Field(default_factory=PublicThirdPartyAppsSettings)
 
 
@@ -184,8 +185,11 @@ class _SettingsEditableFields(_StrictModel):
     refresh_account_interval_minute: int = _numeric_field("refresh_account_interval_minute")
     image_retention_hours: int = _numeric_field("image_retention_hours")
     log_retention_hours: int = _numeric_field("log_retention_hours")
+    console_request_timeout_secs: int = _numeric_field("console_request_timeout_secs")
     image_poll_timeout_secs: int = _numeric_field("image_poll_timeout_secs")
     image_stream_timeout_secs: int = _numeric_field("image_stream_timeout_secs")
+    image_poll_initial_wait_secs: float = _numeric_field("image_poll_initial_wait_secs")
+    image_poll_interval_secs: float = _numeric_field("image_poll_interval_secs")
     image_account_concurrency: int = _numeric_field("image_account_concurrency")
     account_processing_concurrency: int = _numeric_field("account_processing_concurrency")
     image_account_retry_enabled: bool = True

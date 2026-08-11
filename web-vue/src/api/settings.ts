@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { setConsoleRequestTimeoutSecs } from './client'
 import type {
   Settings,
   SettingsMutationResult,
@@ -94,6 +94,7 @@ export interface PublicThirdPartyAppsSettings {
 
 export interface PublicThirdPartyAppsView {
   api_base_url: string
+  console_request_timeout_secs: number
   third_party_apps: PublicThirdPartyAppsSettings
 }
 
@@ -142,15 +143,26 @@ export function prepareSettingsPatch(settings: Settings, baseline: Settings): Se
 }
 
 export const settingsApi = {
-  get: () => apiClient.get<never, SettingsView>('/api/settings'),
+  async get(): Promise<SettingsView> {
+    const response = await apiClient.get<never, SettingsView>('/api/settings')
+    setConsoleRequestTimeoutSecs(response.settings.console_request_timeout_secs)
+    return response
+  },
 
   async getThirdPartyApps(): Promise<PublicThirdPartyAppsView> {
     const response = await apiClient.get<never, PublicThirdPartyAppsView>('/api/third-party-apps')
+    setConsoleRequestTimeoutSecs(response.console_request_timeout_secs)
     return cloneJsonValue(response)
   },
 
-  updatePartial: (payload: SettingsUpdateRequest) =>
-    apiClient.patch<SettingsUpdateRequest, SettingsMutationResult>('/api/settings', cloneJsonValue(payload)),
+  async updatePartial(payload: SettingsUpdateRequest): Promise<SettingsMutationResult> {
+    const response = await apiClient.patch<SettingsUpdateRequest, SettingsMutationResult>(
+      '/api/settings',
+      cloneJsonValue(payload),
+    )
+    setConsoleRequestTimeoutSecs(response.settings.console_request_timeout_secs)
+    return response
+  },
 
   testBackup: () =>
     apiClient.post<Record<string, never>, { result: BackupTestResult }>('/api/backup/test', {}),

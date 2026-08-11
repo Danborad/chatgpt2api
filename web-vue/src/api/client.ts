@@ -30,14 +30,23 @@ type UnauthorizedHandler = () => void | Promise<void>
 
 let unauthorizedHandler: UnauthorizedHandler | null = null
 
+export const DEFAULT_CONSOLE_REQUEST_TIMEOUT_SECS = 600
+
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
   unauthorizedHandler = handler
 }
 
 export const apiClient: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '',
-  timeout: 60000,
+  timeout: DEFAULT_CONSOLE_REQUEST_TIMEOUT_SECS * 1000,
 })
+
+export function setConsoleRequestTimeoutSecs(value: number) {
+  const seconds = Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_CONSOLE_REQUEST_TIMEOUT_SECS
+  apiClient.defaults.timeout = Math.round(seconds * 1000)
+}
 
 export type ApiResponse<T> = AxiosResponse<T>
 

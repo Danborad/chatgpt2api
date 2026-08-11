@@ -69,8 +69,11 @@ export interface Settings {
   refresh_account_interval_minute: number
   image_retention_hours: number
   log_retention_hours: number
+  console_request_timeout_secs: number
   image_poll_timeout_secs: number
   image_stream_timeout_secs: number
+  image_poll_initial_wait_secs: number
+  image_poll_interval_secs: number
   image_account_concurrency: number
   account_processing_concurrency: number
   image_account_retry_enabled: boolean
