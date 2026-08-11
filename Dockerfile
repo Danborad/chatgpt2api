@@ -1,11 +1,12 @@
 ARG TARGETARCH
 
-FROM node:22-alpine AS web-build
+# The console output is architecture-independent, so build it once natively.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
 
 WORKDIR /app/web-vue
 
 COPY web-vue/package.json web-vue/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
@@ -18,7 +19,7 @@ FROM node:22-bookworm-slim AS image-upscale-build
 WORKDIR /app/scripts/image_upscale
 
 COPY scripts/image_upscale/package.json scripts/image_upscale/package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 
 FROM python:3.13-slim AS app
