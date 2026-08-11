@@ -56,7 +56,7 @@
     </section>
 
     <section>
-      <PagePanel>
+      <PagePanel class="!rounded-xl">
         <PanelHeader title="运行环境" align="start" />
 
         <div class="mt-4 grid min-w-0 gap-5 xl:grid-cols-[minmax(20rem,0.9fr)_minmax(0,1.4fr)]">
@@ -117,8 +117,10 @@
 
     <section class="grid grid-cols-1 gap-4">
       <ChartCard title="模型请求分布">
-        <template #actions>
+        <template #title-extra>
           <HelpTip text="仅统计成功及部分成功请求。" />
+        </template>
+        <template #actions>
           <TimeRangeTabs v-model="modelTimeRange" aria-label="模型请求分布时间范围" />
         </template>
         <div ref="modelChartRef" class="h-72 w-full px-2"></div>
@@ -138,7 +140,11 @@
           <TimeRangeTabs v-model="activityTimeRange" aria-label="调用活跃度时间范围" />
         </template>
         <div class="flex h-56 items-center px-1">
-          <div class="mx-auto flex w-full flex-col gap-4" :style="{ maxWidth: activityGridMaxWidth }">
+          <div
+            v-if="activityHasData"
+            class="mx-auto flex w-full flex-col gap-4"
+            :style="{ maxWidth: activityGridMaxWidth }"
+          >
             <div
               :key="`${activityAnimationEpoch}-${activityTimeRange}`"
               class="grid gap-1.5"
@@ -190,6 +196,9 @@
               <span>{{ activityBuckets[activityBuckets.length - 1]?.label || '--' }}</span>
             </div>
           </div>
+          <p v-else class="w-full text-center text-sm text-muted-foreground" role="status">
+            当前范围内暂无可统计请求
+          </p>
         </div>
       </ChartCard>
 
@@ -244,6 +253,7 @@ const {
   responseTimeTimeRange,
   modelResponseTimeTimeRange,
   activityBuckets,
+  activityHasData,
   trendChartRef,
   responseTimeChartRef,
   modelResponseTimeChartRef,

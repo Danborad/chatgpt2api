@@ -227,6 +227,9 @@ export function useDashboardPage() {
   const activityBuckets = computed(() => (
     dashboardRanges.value?.[activityTimeRange.value]?.buckets ?? []
   ))
+  const activityHasData = computed(() => (
+    activityBuckets.value.some(bucket => bucket.total_calls > 0)
+  ))
   const dashboardRuntime = shallowRef<DashboardResponse['runtime'] | null>(null)
   const dashboardOperations = shallowRef<DashboardResponse['operations'] | null>(null)
   const dashboardVersion = ref('--')
@@ -1048,6 +1051,7 @@ export function useDashboardPage() {
     responseTimeTimeRange,
     modelResponseTimeTimeRange,
     activityBuckets,
+    activityHasData,
     trendChartRef,
     responseTimeChartRef,
     modelResponseTimeChartRef,
