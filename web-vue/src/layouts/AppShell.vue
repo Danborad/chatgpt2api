@@ -1,5 +1,18 @@
 ﻿<template>
   <div class="app-shell min-h-screen">
+    <Transition name="route-progress">
+      <div
+        v-if="routeProgressPhase !== 'idle'"
+        class="shell-route-progress pointer-events-none fixed inset-x-0 top-0 z-[70] h-0.5 overflow-hidden"
+        role="progressbar"
+        aria-label="页面加载中"
+      >
+        <div
+          class="shell-route-progress-bar h-full w-full bg-primary"
+          :class="{ 'shell-route-progress-bar--finishing': routeProgressPhase === 'finishing' }"
+        ></div>
+      </div>
+    </Transition>
     <div class="flex min-h-screen flex-col lg:flex-row">
       <div
         v-if="isSidebarOpen && isMobileViewport"
@@ -55,9 +68,11 @@
               class="shell-nav-item group flex items-center overflow-hidden rounded-lg border border-transparent py-1.5 text-sm font-medium transition-colors"
               :class="navItemClassMap[item.path]"
               :aria-label="item.label"
+              :aria-current="isNavActive(item.path) ? 'page' : undefined"
+              :aria-busy="isNavPending(item.path) ? 'true' : undefined"
               @mouseenter="prefetchRouteView(item.path)"
               @focus="prefetchRouteView(item.path)"
-              @click="handleNavClick"
+              @click="handleNavClick(item.path)"
             >
               <Tooltip v-if="isSidebarRail" :text="item.label" placement="right">
                 <span
@@ -304,12 +319,14 @@
                     { 'h-full': isImmersivePage },
                   ]"
                 >
-                  <KeepAlive :include="cachedRouteNames" :max="cachedRouteMax">
-                    <component
-                      :is="Component"
-                      :key="String(currentRoute.name || currentRoute.path)"
-                    />
-                  </KeepAlive>
+                  <Transition name="route-view">
+                    <KeepAlive :include="cachedRouteNames" :max="cachedRouteMax">
+                      <component
+                        :is="Component"
+                        :key="String(currentRoute.name || currentRoute.path)"
+                      />
+                    </KeepAlive>
+                  </Transition>
                 </div>
               </template>
               <template #fallback>
@@ -734,6 +751,9 @@ const updateProgressState = updateProgressRuntime.state
 const releaseEntries = ref<ReleaseInfo[]>([])
 const currentAuthToken = ref('')
 const themeMode = ref<ThemeMode>(getStoredThemeMode())
+type RouteProgressPhase = 'idle' | 'running' | 'finishing'
+const pendingNavigationPath = ref('')
+const routeProgressPhase = ref<RouteProgressPhase>('idle')
 const cachedRouteNames = ['Dashboard', 'Studio', 'Accounts', 'Logs', 'Monitor', 'Gallery', 'Proxy', 'Settings']
 const cachedRouteMax = cachedRouteNames.length
 const themeOptions: { label: string; value: ThemeMode }[] = [
@@ -838,7 +858,9 @@ const { isWorkspaceLayout } = useListLayoutPreference()
 const isContainedManagementPage = computed(() => isManagementPage.value && isWorkspaceLayout.value)
 const usesViewportLayout = computed(() => isWorkspacePage.value || isContainedManagementPage.value)
 const isMobileSidebarActive = computed(() => isMobileViewport.value && isSidebarOpen.value)
-const isSidebarRail = computed(() => isSidebarCollapsed.value || isImmersivePage.value)
+const isSidebarRail = computed(() => (
+  !isMobileViewport.value && (isSidebarCollapsed.value || isImmersivePage.value)
+))
 const sidebarStyle = computed(() => ({
   '--sidebar-width': isSidebarRail.value ? '4rem' : '16rem',
 }))
@@ -864,16 +886,26 @@ const isNavActive = (path: string) => {
   return activeNavPathSet.value.has(path)
 }
 
+function isNavPending(path: string) {
+  return Boolean(pendingNavigationPath.value)
+    && normalizedRoutePath(path) === pendingNavigationPath.value
+}
+
+function isNavVisuallyActive(path: string) {
+  if (pendingNavigationPath.value) return isNavPending(path)
+  return isNavActive(path)
+}
+
 function buildNavItemClass(path: string) {
   const base = navItemBaseClass
-  if (isNavActive(path)) {
+  if (isNavVisuallyActive(path)) {
     return `${base} rounded-[0.9rem] border-[hsl(var(--primary)_/_0.28)] bg-[hsl(var(--primary)_/_0.08)] font-semibold text-foreground shadow-[inset_0_0_0_1px_hsl(var(--primary)_/_0.08)]`
   }
   return `${base} rounded-[0.9rem] border-transparent text-muted-foreground hover:border-border hover:bg-[hsl(var(--secondary)_/_0.55)] hover:text-foreground`
 }
 
 function buildNavIconClass(path: string) {
-  if (isNavActive(path)) {
+  if (isNavVisuallyActive(path)) {
     return 'border-[hsl(var(--primary)_/_0.28)] bg-[hsl(var(--card))] text-foreground shadow-sm'
   }
   return 'border-border bg-[hsl(var(--card))] text-muted-foreground group-hover:border-[hsl(var(--foreground)_/_0.28)] group-hover:text-foreground'
@@ -995,6 +1027,10 @@ const routePendingText = computed(() => `正在加载${currentPageTitle.value}`)
 let systemThemeMedia: MediaQueryList | null = null
 let viewportMedia: MediaQueryList | null = null
 const prefetchedRoutePaths = new Set<string>()
+const routeProgressDelayMs = 140
+const routeProgressFinishMs = 140
+let routeProgressDelayTimer: number | null = null
+let routeProgressFinishTimer: number | null = null
 const defaultReleasePageUrl = 'https://github.com/yukkcat/chatgpt2api/releases'
 const releasePageUrl = computed(() => updateStatus.value?.release_url || defaultReleasePageUrl)
 const updateCheckingMessage = '正在检查云端版本...'
@@ -1352,6 +1388,57 @@ function normalizedRoutePath(path: string) {
   return `/${path.replace(/^\/+/, '').split(/[?#]/)[0]}`
 }
 
+function clearRouteProgressDelayTimer() {
+  if (routeProgressDelayTimer === null) return
+  window.clearTimeout(routeProgressDelayTimer)
+  routeProgressDelayTimer = null
+}
+
+function clearRouteProgressFinishTimer() {
+  if (routeProgressFinishTimer === null) return
+  window.clearTimeout(routeProgressFinishTimer)
+  routeProgressFinishTimer = null
+}
+
+function beginRouteNavigation(path: string) {
+  const normalizedPath = normalizedRoutePath(path)
+  if (normalizedPath === normalizedRoutePath(route.path)) return
+  if (pendingNavigationPath.value === normalizedPath && routeProgressPhase.value !== 'finishing') return
+
+  pendingNavigationPath.value = normalizedPath
+  clearRouteProgressDelayTimer()
+  clearRouteProgressFinishTimer()
+  routeProgressPhase.value = 'idle'
+  routeProgressDelayTimer = window.setTimeout(() => {
+    routeProgressDelayTimer = null
+    if (pendingNavigationPath.value !== normalizedPath) return
+    routeProgressPhase.value = 'running'
+  }, routeProgressDelayMs)
+}
+
+function finishRouteNavigation(path?: string) {
+  const normalizedPath = path ? normalizedRoutePath(path) : ''
+  if (
+    normalizedPath
+    && pendingNavigationPath.value
+    && normalizedPath !== pendingNavigationPath.value
+  ) return
+
+  pendingNavigationPath.value = ''
+  clearRouteProgressDelayTimer()
+  clearRouteProgressFinishTimer()
+  if (routeProgressPhase.value !== 'running') {
+    routeProgressPhase.value = 'idle'
+    return
+  }
+
+  routeProgressPhase.value = 'finishing'
+  routeProgressFinishTimer = window.setTimeout(() => {
+    routeProgressFinishTimer = null
+    routeProgressPhase.value = 'idle'
+  }, routeProgressFinishMs)
+}
+
 function prefetchRouteView(path: string) {
   const normalizedPath = normalizedRoutePath(path)
   const loader = routeViewLoaders[normalizedPath]
@@ -1362,9 +1449,20 @@ function prefetchRouteView(path: string) {
   })
 }
 
-function handleNavClick() {
+function handleNavClick(path: string) {
+  beginRouteNavigation(path)
   closeSidebar()
 }
+
+const removeRouteBeforeGuard = router.beforeEach((to, from) => {
+  if (to.fullPath !== from.fullPath) beginRouteNavigation(to.path)
+})
+const removeRouteAfterHook = router.afterEach((to) => {
+  void nextTick(() => finishRouteNavigation(to.path))
+})
+const removeRouteErrorHook = router.onError((_error, to) => {
+  finishRouteNavigation(to.path)
+})
 
 onMounted(() => {
   applyThemeMode(themeMode.value)
@@ -1387,6 +1485,11 @@ onBeforeUnmount(() => {
   systemThemeMedia = null
   teardownViewportListener()
   clearUpdateTaskPollTimer()
+  clearRouteProgressDelayTimer()
+  clearRouteProgressFinishTimer()
+  removeRouteBeforeGuard()
+  removeRouteAfterHook()
+  removeRouteErrorHook()
 })
 
 </script>
@@ -1399,6 +1502,54 @@ onBeforeUnmount(() => {
 
 .route-view-content {
   min-width: 0;
+}
+
+.route-view-enter-active {
+  transition: opacity 140ms ease-out;
+}
+
+.route-view-enter-from {
+  opacity: 0.88;
+}
+
+.route-progress-enter-active,
+.route-progress-leave-active {
+  transition: opacity 100ms ease-out;
+}
+
+.route-progress-enter-from,
+.route-progress-leave-to {
+  opacity: 0;
+}
+
+.shell-route-progress {
+  background: hsl(var(--primary) / 0.12);
+}
+
+.shell-route-progress-bar {
+  transform: scaleX(0.08);
+  transform-origin: left center;
+  animation: shell-route-progress-running 1.4s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.shell-route-progress-bar--finishing {
+  animation: none;
+  transform: scaleX(1);
+  transition: transform 120ms ease-out;
+}
+
+@keyframes shell-route-progress-running {
+  0% {
+    transform: scaleX(0.08);
+  }
+
+  60% {
+    transform: scaleX(0.62);
+  }
+
+  100% {
+    transform: scaleX(0.84);
+  }
 }
 
 .sidebar-nav-scroll {
@@ -1514,6 +1665,23 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .route-view-enter-active,
+  .route-progress-enter-active,
+  .route-progress-leave-active,
+  .shell-route-progress-bar,
+  .shell-route-progress-bar--finishing {
+    animation: none;
+    transition: none;
+  }
+
+  .shell-route-progress-bar {
+    transform: scaleX(0.84);
+  }
+
+  .shell-route-progress-bar--finishing {
+    transform: scaleX(1);
+  }
+
   .sidebar-label,
   .sidebar-section-label {
     transition: none;

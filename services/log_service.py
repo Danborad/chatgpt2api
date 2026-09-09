@@ -31,6 +31,7 @@ from utils.diagnostics import (
     scrub_diagnostic_value,
 )
 from utils.helper import anthropic_sse_stream, image_sse_stream, sse_json_stream
+from utils.image_tokens import image_output_metadata
 from utils.log import logger
 from utils.timezone import beijing_from_timestamp, beijing_now_str
 
@@ -44,6 +45,7 @@ INTERNAL_RESPONSE_KEYS = {
     "_call_status",
     "_image_urls",
     "_image_attempts",
+    "_image_metadata",
 }
 LOG_IMAGE_URL_RE = re.compile(r"(?:!\[[^\]]*\]\()(?P<url>(?:https?://|/images/|/image-thumbnails/)[^\s)\"']+)\)")
 PERF_WAIT_WARN_MS = 1000
@@ -298,12 +300,17 @@ IMAGE_TRACE_REQUEST_KEYS = {
 }
 
 
-def _image_trace_metadata(body: dict[str, Any]) -> dict[str, object]:
+def image_request_metadata(body: dict[str, Any]) -> dict[str, object]:
     metadata: dict[str, object] = {}
+    source = body
+    for tool in body.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("type") == "image_generation":
+            source = {**body, **tool}
+            break
     for key in IMAGE_TRACE_REQUEST_KEYS:
-        if key not in body:
+        if key not in source:
             continue
-        value = body.get(key)
+        value = source.get(key)
         if value in (None, ""):
             continue
         if isinstance(value, (str, int, float, bool)):
@@ -314,16 +321,22 @@ def _image_trace_metadata(body: dict[str, Any]) -> dict[str, object]:
     return metadata
 
 
-def _image_result_metrics(value: object) -> dict[str, object]:
-    metrics = {
+def image_result_metrics(value: object) -> dict[str, object]:
+    metrics: dict[str, Any] = {
         "result_data_count": 0,
         "result_url_count": 0,
         "result_b64_count": 0,
         "result_b64_chars": 0,
     }
+    images: list[dict[str, int]] = []
 
     def visit(item: object) -> None:
         if isinstance(item, dict):
+            internal_images = item.get("_image_metadata")
+            if isinstance(internal_images, list):
+                images.extend(internal_images)
+            else:
+                images.extend(image_output_metadata(item.get("data")))
             if "data" in item and isinstance(item.get("data"), list):
                 metrics["result_data_count"] = max(
                     int(metrics["result_data_count"]),
@@ -336,7 +349,9 @@ def _image_result_metrics(value: object) -> dict[str, object]:
             if isinstance(b64_json, str) and b64_json.strip():
                 metrics["result_b64_count"] = int(metrics["result_b64_count"]) + 1
                 metrics["result_b64_chars"] = int(metrics["result_b64_chars"]) + len(b64_json)
-            for nested in item.values():
+            for key, nested in item.items():
+                if key == "_image_metadata":
+                    continue
                 if isinstance(nested, (dict, list)):
                     visit(nested)
         elif isinstance(item, list):
@@ -344,6 +359,9 @@ def _image_result_metrics(value: object) -> dict[str, object]:
                 visit(nested)
 
     visit(value)
+    if images:
+        metrics["result_images"] = images
+        metrics["result_data_count"] = max(metrics["result_data_count"], len(images))
     return {
         key: value
         for key, value in metrics.items()
@@ -621,17 +639,24 @@ class LoggedCall:
             return
         body["_call_id"] = self.call_id
         body["_trace_image_perf"] = True
-        self.trace_metadata.update(_image_trace_metadata(body))
+        self.trace_metadata.update(image_request_metadata(body))
 
     def stream(self, items):
         urls: list[str] = []
         account_emails: list[str] = []
         conversation_ids: list[str] = []
         image_attempts: list[dict[str, object]] = []
+        result_metrics: dict[str, Any] = {}
         failed = False
         image_request = self._is_image_request()
         try:
             for item in items:
+                if image_request:
+                    for key, value in image_result_metrics(item).items():
+                        if key == "result_images":
+                            result_metrics.setdefault(key, []).extend(value)
+                        else:
+                            result_metrics[key] = result_metrics.get(key, 0) + value
                 urls.extend(_collect_urls(item))
                 account_emails.extend(_collect_account_emails(item))
                 conversation_ids.extend(_collect_conversation_ids(item))
@@ -640,6 +665,7 @@ class LoggedCall:
         except Exception as exc:
             failed = True
             extra = _exception_log_fields(exc, image=image_request)
+            extra.update(result_metrics)
             combined_attempts = collect_image_attempts([image_attempts, exc])
             if combined_attempts:
                 extra["image_attempts"] = combined_attempts
@@ -667,7 +693,9 @@ class LoggedCall:
             raise
         finally:
             if not failed:
-                extra = {"image_attempts": image_attempts} if image_attempts else None
+                extra = dict(result_metrics)
+                if image_attempts:
+                    extra["image_attempts"] = image_attempts
                 self.log("流式调用结束", urls=urls, account_email=account_emails[0] if account_emails else "",
                          conversation_id=conversation_ids[0] if conversation_ids else "", extra=extra)
 
@@ -730,7 +758,7 @@ class LoggedCall:
         if collected_urls and not self.endpoint.startswith("/v1/search"):
             detail["urls"] = list(dict.fromkeys(collected_urls))
         if self._trace_image_perf():
-            image_metrics = _image_result_metrics(result)
+            image_metrics = image_result_metrics(result)
             if image_metrics:
                 detail.update(image_metrics)
         if self._trace_image_perf():

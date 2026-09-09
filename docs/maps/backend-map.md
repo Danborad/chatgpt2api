@@ -21,6 +21,23 @@ Routers authenticate, validate transport contracts, translate expected domain
 errors to HTTP responses, and call an owning service. They must not become a
 second implementation of service state transitions.
 
+### Model catalog and image compatibility
+
+`ModelCatalogService` defaults chat models to `gpt-5.6` and `auto` and retains
+explicit configured overrides. The console and `/v1/models` consume the same
+catalog; listing models does not query upstream or append upstream-only entries.
+
+`utils.helper.WEB_IMAGE_MODELS` owns the built-in Web image identifiers:
+`gpt-image-2`, `gpt-image-2.5`, `gpt-image-2.5-flare`, and
+`gpt-image-2.5-sunburst`. Model validation and `ModelCatalogService` consume this
+list; Studio consumes the backend catalog. Explicit catalog configuration still
+takes precedence over the built-in list. No `exact` aliases are added.
+
+The 2.5 identifiers use the existing `auto` upstream Web model slug. They are
+compatibility names and do not force a particular official API image engine or
+quality entitlement. Existing `gpt-image-2` and Codex routing and the default
+image model remain unchanged.
+
 ## Domain and persistence ownership
 
 | Domain | Owning Module | Stable Interface/output | Persistence |

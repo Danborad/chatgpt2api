@@ -51,7 +51,7 @@ from utils.helper import (
     is_supported_image_model,
     split_image_model,
 )
-from utils.image_tokens import count_image_content_tokens, image_size_from_bytes
+from utils.image_tokens import count_image_content_tokens, image_output_metadata, image_size_from_bytes
 from utils.log import logger
 from utils.diagnostics import diagnostic_excerpt
 
@@ -2532,6 +2532,9 @@ def _generate_single_image(
             finalize_image_slot(True)
             attach_attempts_to_outputs(outputs)
             if request.trace_image_perf:
+                result_images = image_output_metadata([
+                    item for output in outputs if output.kind == "result" for item in output.data
+                ])
                 _monitor_image_stage(
                     request,
                     "image_single_done",
@@ -2550,6 +2553,11 @@ def _generate_single_image(
                     "total_ms": int((time.perf_counter() - single_started) * 1000),
                     "status": "success",
                     "account_email": account_email,
+                    "requested_size": request.size or "auto",
+                    "quality": request.quality,
+                    "response_format": request.response_format,
+                    "image_count": len(result_images),
+                    "result_images": result_images,
                 })
             return outputs
         except Exception as exc:
@@ -2920,6 +2928,7 @@ def stream_image_chunks(
                     if usage:
                         completed["usage"] = usage
                 completed_payload = _image_stream_payload(output, f"{prefix}.completed", completed)
+                completed_payload["_image_metadata"] = image_output_metadata([item])
                 if output.image_urls:
                     completed_payload["_image_urls"] = list(output.image_urls)
                 yield completed_payload

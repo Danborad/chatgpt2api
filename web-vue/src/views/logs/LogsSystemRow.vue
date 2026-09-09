@@ -60,6 +60,14 @@
         </MetaChip>
       </div>
     </td>
+    <td class="py-4 pr-5 align-middle">
+      <p
+        class="break-words font-mono text-xs tabular-nums text-foreground"
+        :title="item.presentation.result.resolution ? `实际分辨率：${item.presentation.result.resolution}` : ''"
+      >
+        {{ item.presentation.result.resolution || '-' }}
+      </p>
+    </td>
     <td class="py-4 pr-5 align-middle text-xs text-muted-foreground">
       <div :title="[durationDisplay.total, durationDisplay.breakdown].filter(Boolean).join(' ')">
         <MetaChip

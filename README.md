@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v3.2.2-111827" alt="Version v3.2.2" />
+  <img src="https://img.shields.io/badge/version-v3.2.3-111827" alt="Version v3.2.3" />
   <img src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13" />
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white" alt="Vue 3" />
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18" />
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yukkcat/chatgpt2api/releases/tag/v3.2.2">v3.2.2 Release</a>
+  <a href="https://github.com/yukkcat/chatgpt2api/releases/tag/v3.2.3">v3.2.3 Release</a>
   · <a href="./CHANGELOG.md">更新说明</a>
   · <a href="./docs/README.md">维护文档</a>
 </p>
@@ -64,10 +64,10 @@ curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/main/deploy/ins
 
 安装时可选择 SQLite、本地 PostgreSQL 18 容器或已有 PostgreSQL URL。SQLite 无需额外配置；本地 PostgreSQL 由 Compose 自动启动并持久化。
 
-固定安装 `v3.2.2`：
+固定安装 `v3.2.3`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/v3.2.2/deploy/install.sh | sudo bash -s -- --branch v3.2.2
+curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/v3.2.3/deploy/install.sh | sudo bash -s -- --branch v3.2.3
 ```
 
 ### Docker Compose
@@ -154,7 +154,7 @@ Authorization: Bearer <auth-key>
 
 | 接口                                | 方法         | 说明                                                 |
 | :---------------------------------- | :----------- | :--------------------------------------------------- |
-| `/v1/models`                        | `GET`        | 返回本地目录与上游实时模型合并后的模型列表           |
+| `/v1/models`                        | `GET`        | 返回与控制台一致的模型目录，默认聊天模型为 `gpt-5.6`、`auto` |
 | `/v1/chat/completions`              | `POST`       | 文本、搜索和图片场景的 Chat Completions 入口         |
 | `/v1/responses`                     | `POST`       | 支持文本、搜索和图片工具调用的 Responses 入口        |
 | `/v1/messages`                      | `POST`       | Anthropic Messages 兼容入口                          |

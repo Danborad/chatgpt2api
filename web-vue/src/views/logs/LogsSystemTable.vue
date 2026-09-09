@@ -9,17 +9,17 @@
     loading-title="正在加载日志"
     loading-description="正在获取最新日志数据。"
     :show-empty="!isFetching && visibleLogs.length === 0"
-    :empty-colspan="8"
+    :empty-colspan="9"
     :empty-title="logsLoadError ? '日志加载失败' : '暂无日志'"
     :empty-description="logsLoadError || '换个筛选条件或刷新后再看。'"
     :scroll-class="layoutMode === 'workspace' ? 'max-h-[min(36rem,60dvh)] lg:max-h-none' : ''"
-    table-class="w-full min-w-[900px] table-fixed"
+    table-class="w-full min-w-[1080px] table-fixed"
     head-class="normal-case tracking-normal"
     style="--table-shell-footer-padding: 12px 0 0"
   >
     <template #head>
       <tr>
-        <th class="w-[4%] py-3 pl-4 pr-2">
+        <th class="w-[3%] py-3 pl-4 pr-2">
           <Checkbox
             :model-value="allVisibleLogsSelected"
             :indeterminate="someVisibleLogsSelected"
@@ -29,13 +29,14 @@
             <span class="sr-only">全选当前页日志</span>
           </Checkbox>
         </th>
-        <th class="w-[9%] py-3 pr-5">时间</th>
-        <th class="w-[19%] py-3 pr-5">请求</th>
-        <th class="w-[16%] py-3 pr-5">执行</th>
-        <th class="w-[9%] py-3 pr-5">耗时</th>
-        <th class="w-[9%] py-3 pr-5">图片</th>
-        <th class="w-[19%] py-3 pr-5">结果</th>
-        <th class="w-[15%] py-3 pr-4 text-right">操作</th>
+        <th class="w-[8%] py-3 pr-5">时间</th>
+        <th class="w-[17%] py-3 pr-5">请求</th>
+        <th class="w-[13%] py-3 pr-5">执行</th>
+        <th class="w-[14%] py-3 pr-5">分辨率</th>
+        <th class="w-[8%] py-3 pr-5">耗时</th>
+        <th class="w-[7%] py-3 pr-5">图片</th>
+        <th class="w-[17%] py-3 pr-5">结果</th>
+        <th class="w-[13%] py-3 pr-4 text-right">操作</th>
       </tr>
     </template>
 

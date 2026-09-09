@@ -59,6 +59,20 @@ def image_size_from_bytes(data: bytes) -> tuple[int, int] | None:
     return int(width), int(height)
 
 
+def image_output_metadata(items: object) -> list[dict[str, int]]:
+    """Project measured output dimensions without copying or decoding image data."""
+    if not isinstance(items, list):
+        return []
+    metadata: list[dict[str, int]] = []
+    for item in items:
+        if not isinstance(item, dict) or not (item.get("url") or item.get("b64_json")):
+            continue
+        width, height = item.get("width"), item.get("height")
+        known = all(type(value) is int and value > 0 for value in (width, height))
+        metadata.append({"width": width, "height": height} if known else {})
+    return metadata
+
+
 def _decode_data_url(value: str) -> bytes:
     text = str(value or "").strip()
     payload = text.split(",", 1)[1] if text.startswith("data:") and "," in text else text

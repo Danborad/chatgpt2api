@@ -54,6 +54,7 @@ class CallPresentationRequest(BaseModel):
     kind: str
     primary: str
     secondary: str
+    parameters: str = ""
 
 
 class CallPresentationExecution(BaseModel):
@@ -68,6 +69,7 @@ class CallPresentationResult(BaseModel):
 
     text: str
     diagnostics: str
+    resolution: str = ""
 
 
 class CallPresentationDuration(BaseModel):

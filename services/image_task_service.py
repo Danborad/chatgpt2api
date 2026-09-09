@@ -28,7 +28,13 @@ from services.image_failure import (
 )
 from services.image_task_view import image_task_page, image_task_row
 from services.json_file import read_json_file, write_json_file
-from services.log_service import LOG_TYPE_CALL, collect_image_attempts, log_service
+from services.log_service import (
+    LOG_TYPE_CALL,
+    collect_image_attempts,
+    image_request_metadata,
+    image_result_metrics,
+    log_service,
+)
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 from services.realtime_monitor_service import realtime_monitor_service
 from services.storage.file_lock import interprocess_lock
@@ -809,6 +815,8 @@ class ImageTaskService:
                 account_email=account_email,
                 call_id=call_id,
                 perf=perf_timings,
+                request_payload=payload,
+                result=result,
                 extra={"image_attempts": image_attempts} if image_attempts else None,
             )
         except Exception as exc:
@@ -834,6 +842,7 @@ class ImageTaskService:
                 conversation_id=conversation_id,
                 call_id=call_id,
                 perf=perf_timings,
+                request_payload=payload,
                 extra=error_details,
             )
 
@@ -854,6 +863,8 @@ class ImageTaskService:
         call_id: str = "",
         perf: dict[str, int] | None = None,
         extra: dict[str, Any] | None = None,
+        request_payload: dict[str, Any] | None = None,
+        result: object = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
         summary_prefix = "图生图" if mode == "edit" else "文生图"
@@ -868,7 +879,11 @@ class ImageTaskService:
             "ended_at": _now_iso(),
             "duration_ms": int((time.time() - started) * 1000),
             "status": status,
+            "image_request": True,
         }
+        if request_payload is not None:
+            detail["request_meta"] = image_request_metadata(request_payload)
+        detail.update(image_result_metrics(result))
         if perf:
             detail["perf"] = dict(perf)
         if request_preview:
@@ -1090,6 +1105,9 @@ class ImageTaskService:
         handler_queue_ms = max(0, int((time.perf_counter() - submitted_perf) * 1000))
         self._update_task(key, status=TASK_STATUS_RUNNING)
         backend = None
+        with self._lock:
+            request_payload = dict(self._tasks.get(key) or {})
+        request_payload["response_format"] = "b64_json"
         try:
             from services.openai_backend_api import OpenAIBackendAPI
             from services.protocol.conversation import format_image_result
@@ -1149,6 +1167,8 @@ class ImageTaskService:
                 status="success",
                 urls=_collect_image_urls(formatted),
                 perf={"handler_queue_ms": handler_queue_ms},
+                request_payload=request_payload,
+                result=formatted,
             )
         except Exception as exc:
             public_error, raw_error, error_details = _normalize_task_failure(exc, "resume poll failed")
@@ -1172,6 +1192,7 @@ class ImageTaskService:
                 status="failed",
                 error=public_error,
                 perf={"handler_queue_ms": handler_queue_ms},
+                request_payload=request_payload,
                 extra=error_details,
             )
         finally:

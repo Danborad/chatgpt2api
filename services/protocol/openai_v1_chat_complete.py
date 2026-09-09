@@ -36,6 +36,7 @@ from utils.image_tokens import (
     count_image_inputs_tokens,
     count_image_output_items_tokens,
     image_usage,
+    image_output_metadata,
 )
 
 TOOL_UNAVAILABLE_SYSTEM_MESSAGE = (
@@ -103,6 +104,7 @@ def _with_log_metadata(
     conversation_id: str = "",
     image_urls: Iterable[str] | None = None,
     image_attempts: Iterable[dict[str, Any]] | None = None,
+    image_data: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if account_email:
         payload["_account_email"] = account_email
@@ -114,6 +116,8 @@ def _with_log_metadata(
     attempts = [dict(item) for item in image_attempts or [] if isinstance(item, dict)]
     if attempts:
         payload["_image_attempts"] = attempts
+    if image_data:
+        payload["_image_metadata"] = image_output_metadata(image_data)
     return payload
 
 
@@ -268,6 +272,7 @@ def image_chat_response(body: dict[str, Any]) -> dict[str, Any]:
         str(result.get("_conversation_id") or ""),
         result.get("_image_urls") if isinstance(result.get("_image_urls"), list) else None,
         result.get("_image_attempts") if isinstance(result.get("_image_attempts"), list) else None,
+        result.get("data"),
     )
     return response
 
@@ -312,6 +317,7 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
                 output.conversation_id,
                 output.image_urls,
                 output.image_attempts,
+                output.data if output.kind == "result" else None,
             )
         else:
             yield _with_log_metadata(
@@ -320,6 +326,7 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
                 output.conversation_id,
                 output.image_urls,
                 output.image_attempts,
+                output.data if output.kind == "result" else None,
             )
     if not sent_role:
         yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)

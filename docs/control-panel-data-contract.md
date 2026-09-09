@@ -36,6 +36,12 @@
 
 `CallOutcome` 的当前值为 `success`、`failed`、`rate_limited`、`text_review`、`partial_success` 和 `unknown`。日志、实时监控和概览读取同一套后端结果投影；它们可以显示不同粒度，但不能各自重新分类。
 
+图片 Call Record 的 `request_meta` 记录请求中的尺寸、质量、张数和返回格式等参数；Responses 的图片工具参数由同一个提取入口读取。这些字段表示请求值，不代表上游实际采用了相应质量或尺寸。`raw_detail.result_images` 按已返回图片保存实际 `width`、`height`，无法识别宽高的图片保留空对象，列表和详情显示“未知”，不以请求尺寸代填。`result_data_count` 记录结果数量。
+
+日志摘要的 `presentation.request.parameters` 提供请求尺寸、质量和返回格式，`presentation.result.resolution` 提供去重后的实际分辨率。列表的尺寸列只展示实际分辨率，请求参数和每张图片的分辨率在详情中查看。列表不逐条读取详情或图片文件，缺少元数据的历史日志不追溯补充。
+
+普通图片响应、聊天生图、Responses、SSE 和 Studio 任务复用日志元数据提取。SSE 仅累计结果元数据，不保留整段图片流；内部 `_image_metadata` 在对外响应前移除。宽高复用图片结果整理阶段已读取的图片头信息，日志不会额外下载或解码图片。终端的 `image_single_done` 成功事件也包含请求尺寸、质量、返回格式、数量和实际宽高。历史日志不追溯补充这些字段。
+
 图片任务是独立的异步资源。任务存储状态为 `queued`、`running`、`success` 或 `error`；`/api/image-tasks` 再根据结果数量和失败分类投影为 `success`、`partial_success`、`failed` 或 `text_review`。`text_review` 表示上游返回可展示文本，而不是图片生成失败后再由前端推断出的状态。
 
 可编辑文件任务同样是独立的异步资源，但不复用图片任务字段。`/v1/editable-file-tasks` 直接返回 `queued`、`running`、`success` 或 `error`；成功结果包含主文件和 ZIP 下载地址，Studio 只按该投影更新会话状态与下载操作。任务的创建、查询和删除按用户密钥隔离；成功发布后的 `/files/...` 是与图片一致的公开资产地址，只校验存储路径和文件存在性，不反查任务记录。Editable File Task Service 持有固定 20 分钟总时限，一次上游准备、生成、轮询和下载共享同一截止时间；前端轮询不拥有该时限。

@@ -46,6 +46,7 @@ export type CallPresentation = {
     kind: string
     primary: string
     secondary: string
+    parameters?: string
   }
   execution: {
     primary: string
@@ -55,6 +56,7 @@ export type CallPresentation = {
   result: {
     text: string
     diagnostics: string
+    resolution?: string
   }
   summary_text: string
   duration: {

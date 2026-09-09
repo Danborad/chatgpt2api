@@ -11,6 +11,7 @@ from services.request_detail_view import (
     build_request_detail_core,
     build_request_timeline_presentation,
     format_request_duration,
+    request_image_resolutions,
     request_status_presentation,
 )
 
@@ -568,6 +569,7 @@ def _result_text(summary: Mapping[str, Any]) -> str:
 def _build_presentation(
     summary: Mapping[str, Any],
     attempts: list[dict[str, Any]],
+    detail: Mapping[str, Any],
 ) -> dict[str, Any]:
     outcome = _clean(summary.get("outcome"))
     log_type = _clean(summary.get("type"))
@@ -598,11 +600,19 @@ def _build_presentation(
         summary_text = _clean(summary.get("public_error"))
 
     duration_ms = _int(summary.get("duration_ms"))
+    request_meta = _record(detail.get("request_meta"))
+    image_parameters = " · ".join(
+        f"{label} {_clean(request_meta[key])}"
+        for key, label in (("size", "请求"), ("quality", "质量"), ("response_format", "返回"))
+        if _clean(request_meta.get(key))
+    )
+    resolutions = dict.fromkeys(request_image_resolutions(detail))
     return {
         "request": {
             "kind": "" if log_type == "account" else _business_label(business, log_type),
             "primary": _clean(summary.get("model")) or _type_label(log_type),
             "secondary": _clean(summary.get("endpoint")),
+            "parameters": image_parameters,
         },
         "execution": {
             "primary": execution_primary,
@@ -612,6 +622,7 @@ def _build_presentation(
         "result": {
             "text": _result_text(summary),
             "diagnostics": diagnostics,
+            "resolution": " / ".join(resolutions),
         },
         "summary_text": summary_text,
         "duration": {
@@ -758,7 +769,7 @@ def build_call_summary(item: Mapping[str, Any], *, error_limit: int = _SUMMARY_E
         "switch_count": switch_count,
         "recovered_after_switch": switch_count > 0 and outcome in {"success", "partial_success"},
     }
-    summary["presentation"] = _build_presentation(summary, attempts)
+    summary["presentation"] = _build_presentation(summary, attempts, _detail(item))
     return summary
 
 

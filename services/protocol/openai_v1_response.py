@@ -34,6 +34,7 @@ from utils.image_tokens import (
     count_image_content_tokens,
     count_image_output_items_tokens,
     image_usage,
+    image_output_metadata,
     token_usage,
 )
 
@@ -434,6 +435,7 @@ def stream_image_response(
             completed = response_completed(response_id, model, created, items, usage)
             _with_log_metadata(completed, output.account_email, output.conversation_id, output.image_urls, output.image_attempts)
             _with_log_metadata(completed["response"], output.account_email, output.conversation_id, output.image_urls, output.image_attempts)
+            completed["response"]["_image_metadata"] = image_output_metadata(output.data)
             yield completed
             return
     raise RuntimeError("image generation failed")

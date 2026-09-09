@@ -396,6 +396,15 @@ def _diagnostic_stage_text(
     return stage
 
 
+def request_image_resolutions(detail: Mapping[str, Any]) -> list[str]:
+    result_images = detail.get("result_images")
+    return [
+        f'{image["width"]}×{image["height"]}'
+        if image.get("width") and image.get("height") else "未知"
+        for image in result_images or [] if isinstance(image, Mapping)
+    ] if isinstance(result_images, list) else []
+
+
 def build_request_detail_core(
     summary: Mapping[str, Any],
     detail: Mapping[str, Any],
@@ -408,10 +417,18 @@ def build_request_detail_core(
     hide_account_identity: bool = False,
     suppress_timeline: bool = False,
 ) -> dict[str, Any]:
+    request_meta = _record(detail.get("request_meta"))
+    resolutions = request_image_resolutions(detail)
     primary_candidates = [
         request_detail_field("请求 ID", detail.get("call_id") or summary.get("id"), copyable=True),
         request_detail_field("接口", summary.get("endpoint"), copyable=True),
         request_detail_field("模型", summary.get("model"), copyable=True),
+        request_detail_field("请求尺寸", request_meta.get("size")),
+        request_detail_field("实际分辨率", resolutions),
+        request_detail_field("请求质量", request_meta.get("quality")),
+        request_detail_field("返回格式", request_meta.get("response_format")),
+        request_detail_field("请求张数", request_meta.get("n")),
+        request_detail_field("出图张数", len(resolutions) if resolutions else None),
         None if hide_account_identity else request_detail_field("账号", summary.get("account_email"), copyable=True),
         request_detail_field(
             "密钥",
