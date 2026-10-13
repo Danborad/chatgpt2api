@@ -1,20 +1,31 @@
 services:
   app:
-    image: ${CHATGPT2API_IMAGE:-ghcr.io/yukkcat/chatgpt2api:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chatgpt2api:local
     container_name: chatgpt2api
     restart: unless-stopped
-    ports:
-      - "${CHATGPT2API_PORT:-3000}:80"
+    # Roxy 指纹浏览器本地调试端口只监听 127.0.0.1，必须用 host 网络才能被容器内的 Selenium 访问。
+    network_mode: host
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${CHATGPT2API_PORT:-3005}", "--access-log"]
     volumes:
-      - chatgpt2api-runtime:/app
       - ./data:/app/data
       - ./config.json:/app/config.json
+      # 挂载宿主机 DNS 解析配置，确保宿主机网关/DNS变更时容器内实时同步更新
+      - /etc/resolv.conf:/etc/resolv.conf:ro
+      # 挂载宿主机 RoxyBrowser 目录，容器内可直接使用其 chromedriver。
+      - /root/.config/RoxyBrowser:/root/.config/RoxyBrowser:ro
     environment:
-      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/chatgpt2api.db}
       CHATGPT2API_AUTH_KEY: ${CHATGPT2API_AUTH_KEY:-}
       CHATGPT2API_BASE_URL: ${CHATGPT2API_BASE_URL:-}
       CHATGPT2API_THREAD_TOKENS: ${CHATGPT2API_THREAD_TOKENS:-120}
       TZ: ${TZ:-Asia/Shanghai}
-
-volumes:
-  chatgpt2api-runtime:
+      ROXY_API_BASE: ${ROXY_API_BASE:-http://127.0.0.1:50000}
+      ROXY_API_TOKEN: ${ROXY_API_TOKEN:-}
+      ROXY_WORKSPACE_ID: ${ROXY_WORKSPACE_ID:-}
+      ROXY_PROJECT_ID: ${ROXY_PROJECT_ID:-}
+      ROXY_OPEN_HEADLESS: ${ROXY_OPEN_HEADLESS:-false}
+      ROXY_CREATE_USE_PROXY_POOL: ${ROXY_CREATE_USE_PROXY_POOL:-true}
+      ROXY_PROXY_POOL: ${ROXY_PROXY_POOL:-}

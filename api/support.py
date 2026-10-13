@@ -130,4 +130,8 @@ def resolve_web_asset(requested_path: str) -> Path | None:
             continue
         if candidate.is_file():
             return candidate
+    # SPA 兜底：无扩展名的前端路由（如 /register）直接回退到 index.html，避免刷新 404。
+    index_file = base_dir / "index.html"
+    if index_file.is_file() and "." not in Path(clean_path).name:
+        return index_file
     return None
