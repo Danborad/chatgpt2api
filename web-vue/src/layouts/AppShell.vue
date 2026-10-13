@@ -805,6 +805,12 @@ const menuItems: NavigationItem[] = [
     capability: 'admin_console',
   },
   {
+    path: '/register',
+    label: '注册机',
+    icon: 'M12 2a2 2 0 0 1 2 2v2h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4V4a2 2 0 0 1 2-2zm-2 8H8v2h2v-2zm6 0h-2v2h2v-2zm-6 4H8v2h2v-2zm6 0h-2v2h2v-2z',
+    capability: 'admin_console',
+  },
+  {
     path: '/logs',
     label: '日志管理',
     icon: 'M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2z',
@@ -833,6 +839,7 @@ const menuItems: NavigationItem[] = [
 const routeTitleMap: Record<string, string> = {
   dashboard: '概览中心',
   accounts: '账号管理',
+  register: '注册机',
   logs: '日志管理',
   gallery: '图片管理',
   proxy: '代理管理',
@@ -1310,13 +1317,18 @@ async function pollUpdateTask() {
     clearUpdateTaskPollTimer()
     await checkForUpdates(false)
     const targetTag = normalizeVersionTag(task.latest_tag)
+    // 单会话只自动重载一次：避免残留的“已成功”更新任务与当前构建版本不一致时形成整页重载死循环。
+    const reloadGuardKey = 'chatgpt2api.updateReloadGuard'
+    const reloadAlreadyDone = window.sessionStorage.getItem(reloadGuardKey) === String(task.task_id || targetTag)
     if (
       !updateReloadScheduled
+      && !reloadAlreadyDone
       && task.state === 'succeeded'
       && targetTag
       && normalizeVersionTag(localVersion) !== targetTag
     ) {
       updateReloadScheduled = true
+      window.sessionStorage.setItem(reloadGuardKey, String(task.task_id || targetTag))
       window.setTimeout(() => window.location.reload(), 400)
     }
   } catch {

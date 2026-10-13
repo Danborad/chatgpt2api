@@ -608,20 +608,23 @@ class DashboardMetricsService:
             raise ValueError(f"Unsupported dashboard time range: {time_range}")
         bucket_delta = timedelta(hours=1) if time_range == "24h" else timedelta(days=1)
         bucket_format = "%H:00" if time_range == "24h" else "%m-%d"
-        current_bucket_start = (
-            now.replace(minute=0, second=0, microsecond=0)
-            if time_range == "24h"
-            else now.replace(hour=0, minute=0, second=0, microsecond=0)
-        )
-        starts = [
-            current_bucket_start - bucket_delta * (bucket_count - 1 - index)
-            for index in range(bucket_count)
-        ]
+        if time_range == "24h":
+            # 自然日“今日”模式：固定从今天 00:00 到 23:00 的 24 个整点小时桶，不使用动态滑窗
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            starts = [today_start + bucket_delta * index for index in range(bucket_count)]
+            end_at = (today_start + timedelta(days=1)).isoformat(timespec="seconds")
+        else:
+            current_bucket_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            starts = [
+                current_bucket_start - bucket_delta * (bucket_count - 1 - index)
+                for index in range(bucket_count)
+            ]
+            end_at = now.isoformat(timespec="seconds")
         labels = [start.strftime(bucket_format) for start in starts]
         window = {
             "requested": time_range,
             "start_at": starts[0].isoformat(timespec="seconds"),
-            "end_at": now.isoformat(timespec="seconds"),
+            "end_at": end_at,
             "bucket_unit": "hour" if time_range == "24h" else "day",
             "bucket_count": bucket_count,
         }
