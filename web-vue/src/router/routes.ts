@@ -33,7 +33,7 @@ export const appRoutes: RouteRecordRaw[] = [
         path: 'register',
         name: 'register',
         component: () => import('@/views/Register.vue'),
-        meta: { requiredCapability: 'admin_console', management: true },
+        meta: { requiredCapability: 'admin_console' },
       },
       {
         path: 'settings',

@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-6 pb-16">
     <PagePanel class="space-y-5">
       <PanelHeader title="Roxy 指纹注册机" align="start">
         <template #copy>
@@ -11,10 +11,10 @@
           <div class="flex flex-wrap items-center gap-2">
             <span
               class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-              :class="registerConfig?.enabled ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground'"
+              :class="registerStatusBadgeClass"
             >
-              <span class="h-2 w-2 rounded-full" :class="registerConfig?.enabled ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'"></span>
-              {{ registerConfig?.enabled ? '运行中' : '已停止' }}
+              <span class="h-2 w-2 rounded-full" :class="registerStatusDotClass"></span>
+              {{ registerStatusText }}
             </span>
             <Button
               v-if="!registerConfig?.enabled"
@@ -83,6 +83,18 @@
         </SurfaceBox>
       </div>
 
+      <!-- 定时周期注册休眠提示 -->
+      <div
+        v-if="isPeriodicWaiting && stats.retry_at"
+        class="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 flex flex-wrap items-center justify-between gap-2"
+      >
+        <div class="flex items-center gap-2">
+          <span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span>
+          <span><b>定时周期注册休眠中</b>：已完成第 {{ stats.periodic_round || 1 }} 轮注册，下一轮计划于 <b>{{ formatNextRunTime(stats.retry_at) }}</b> 自动启动。</span>
+        </div>
+        <span class="text-[11px] text-amber-600/80 dark:text-amber-400/80">无需人工操作，到达设定间隔后自动唤醒</span>
+      </div>
+
       <!-- 分组标签：实时日志 / 配置管理 -->
       <ConsoleSegmentedTabs
         v-model="activeTab"
@@ -125,6 +137,85 @@
 
       <!-- Tab 2: 任务与邮箱配置 -->
       <div v-show="activeTab === 'config'" class="space-y-5">
+        <!-- 1. Roxy 指纹浏览器客户端连接配置 -->
+        <FormSection title="Roxy 指纹浏览器连接配置 (本机客户端)" density="roomy">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <label class="block text-xs">
+              <span class="ui-field-label">Roxy 本机 API 地址</span>
+              <Input
+                v-model="localConfig.roxy.api_base"
+                block
+                root-class="font-mono"
+                placeholder="http://127.0.0.1:50000"
+                :disabled="registerConfig?.enabled"
+              />
+            </label>
+
+            <label class="block text-xs sm:col-span-1 lg:col-span-2">
+              <div class="flex items-center justify-between">
+                <span class="ui-field-label">Roxy API 密钥 (Token)</span>
+                <button
+                  type="button"
+                  class="text-[11px] text-muted-foreground hover:text-foreground"
+                  @click="showRoxyToken = !showRoxyToken"
+                >
+                  {{ showRoxyToken ? '隐藏' : '显示' }}
+                </button>
+              </div>
+              <div class="mt-1">
+                <Input
+                  v-model="localConfig.roxy.api_token"
+                  :type="showRoxyToken ? 'text' : 'password'"
+                  block
+                  root-class="font-mono"
+                  placeholder="在 Roxy 客户端 -> API & AI MCP 页面获取"
+                  :disabled="registerConfig?.enabled"
+                />
+              </div>
+            </label>
+          </div>
+
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 items-center">
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                v-model="localConfig.roxy.open_headless"
+                class="rounded border-border"
+                :disabled="registerConfig?.enabled"
+              />
+              <span>无头静默运行 (Headless，不弹窗)</span>
+            </label>
+
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                v-model="localConfig.roxy.activate_account"
+                class="rounded border-border"
+                :disabled="registerConfig?.enabled"
+              />
+              <span>注册成功后自动发送首条消息激活</span>
+            </label>
+
+            <label class="block text-xs">
+              <span class="ui-field-label">验证码单次等待超时 (秒)</span>
+              <Input
+                v-model="otpWaitSecondsInput"
+                type="number"
+                min="10"
+                max="300"
+                step="5"
+                block
+                :disabled="registerConfig?.enabled"
+              />
+            </label>
+          </div>
+
+          <p class="mt-2 text-[11px] text-muted-foreground">
+            提示：只需填写 API 密钥，工作区与项目 ID 会由系统自动识别获取；浏览器代理请直接在 Roxy 客户端内部配置，无需在此重复设置。
+          </p>
+        </FormSection>
+
+        <!-- 2. 调度与目标策略 -->
         <FormSection title="调度与目标策略" density="roomy">
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label class="block text-xs">
@@ -134,35 +225,84 @@
                 class="ui-select-sm mt-1 w-full"
                 :disabled="registerConfig?.enabled"
               >
-                <option value="available">按健康账号数 (达标即停)</option>
+                <option value="periodic">定时周期注册 (每隔 X 小时注册 N 个)</option>
                 <option value="total">按注册总轮数 (跑完即停)</option>
+                <option value="available">按健康账号数 (达标即停)</option>
                 <option value="quota">按号池总配额 (达标即停)</option>
               </select>
             </label>
 
-            <label class="block text-xs">
-              <span class="ui-field-label">目标健康账号数</span>
-              <Input
-                v-model="targetAvailableInput"
-                type="number"
-                min="1"
-                step="1"
-                block
-                :disabled="registerConfig?.enabled"
-              />
-            </label>
+            <!-- 定时周期注册模式配置 -->
+            <template v-if="localConfig.mode === 'periodic'">
+              <label class="block text-xs">
+                <span class="ui-field-label">定时周期时间 (小时)</span>
+                <Input
+                  v-model="periodicIntervalInput"
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  block
+                  placeholder="例如 1 或 2"
+                  :disabled="registerConfig?.enabled"
+                />
+              </label>
 
-            <label class="block text-xs">
-              <span class="ui-field-label">单轮注册任务数</span>
-              <Input
-                v-model="totalInput"
-                type="number"
-                min="1"
-                step="1"
-                block
-                :disabled="registerConfig?.enabled"
-              />
-            </label>
+              <label class="block text-xs">
+                <span class="ui-field-label">每轮自动注册数量</span>
+                <Input
+                  v-model="periodicCountInput"
+                  type="number"
+                  min="1"
+                  step="1"
+                  block
+                  placeholder="例如 1 或 2"
+                  :disabled="registerConfig?.enabled"
+                />
+              </label>
+            </template>
+
+            <!-- 其它模式配置 -->
+            <template v-else-if="localConfig.mode === 'available'">
+              <label class="block text-xs">
+                <span class="ui-field-label">目标健康账号数</span>
+                <Input
+                  v-model="targetAvailableInput"
+                  type="number"
+                  min="1"
+                  step="1"
+                  block
+                  :disabled="registerConfig?.enabled"
+                />
+              </label>
+            </template>
+
+            <template v-else-if="localConfig.mode === 'quota'">
+              <label class="block text-xs">
+                <span class="ui-field-label">目标号池总配额</span>
+                <Input
+                  v-model="targetQuotaInput"
+                  type="number"
+                  min="1"
+                  step="10"
+                  block
+                  :disabled="registerConfig?.enabled"
+                />
+              </label>
+            </template>
+
+            <template v-else-if="localConfig.mode === 'total'">
+              <label class="block text-xs">
+                <span class="ui-field-label">单轮注册任务数</span>
+                <Input
+                  v-model="totalInput"
+                  type="number"
+                  min="1"
+                  step="1"
+                  block
+                  :disabled="registerConfig?.enabled"
+                />
+              </label>
+            </template>
 
             <label class="block text-xs">
               <span class="ui-field-label">并发线程数</span>
@@ -365,11 +505,13 @@ import {
   startRoxyRegister,
   stopRoxyRegister,
   resetRoxyRegister,
+  saveRoxyRegisterConfig,
   saveSharedRegisterConfig,
   subscribeRoxyRegisterEvents,
   type RegisterConfig,
   type RegisterLogItem,
   type MailProviderConfig,
+  type RoxyConfig,
 } from '@/api/register'
 
 const activeTab = ref<'logs' | 'config'>('logs')
@@ -379,11 +521,16 @@ const savingConfig = ref(false)
 const registerConfig = ref<RegisterConfig | null>(null)
 const logContainerRef = ref<HTMLDivElement | null>(null)
 const expandedProviderIndices = ref<number[]>([0])
+const showRoxyToken = ref(false)
+const otpWaitSecondsInput = ref('60')
 
 // 响应式表单字段
 const targetAvailableInput = ref('10')
+const targetQuotaInput = ref('250')
 const totalInput = ref('10')
 const threadsInput = ref('1')
+const periodicIntervalInput = ref('1')
+const periodicCountInput = ref('1')
 const localConfig = ref<RegisterConfig>({
   mail: {
     request_timeout: 30,
@@ -395,14 +542,27 @@ const localConfig = ref<RegisterConfig>({
   proxy: '',
   total: 10,
   threads: 1,
-  mode: 'available',
+  mode: 'periodic',
   target_quota: 250,
   target_available: 10,
+  periodic_interval_hours: 1.0,
+  periodic_count: 1,
   check_interval: 5,
   schedule_enabled: false,
   schedule_start: '08:00',
   schedule_end: '23:00',
   enabled: false,
+  roxy: {
+    api_base: 'http://127.0.0.1:50000',
+    api_token: '',
+    workspace_id: '',
+    project_id: '',
+    open_headless: false,
+    create_use_proxy_pool: false,
+    proxy_pool: '',
+    activate_account: true,
+    otp_wait_seconds: 60,
+  },
 })
 
 let unsubscribeEvents: (() => void) | null = null
@@ -429,6 +589,42 @@ const successRate = computed(() => {
   if (!done) return 0
   return Math.round((success / done) * 100)
 })
+
+const isPeriodicWaiting = computed(() => {
+  return Boolean(
+    registerConfig.value?.enabled &&
+    (stats.value.pause_reason === 'periodic_interval_wait' ||
+      (localConfig.value.mode === 'periodic' && stats.value.retry_at && (stats.value.running || 0) === 0))
+  )
+})
+
+const registerStatusText = computed(() => {
+  if (!registerConfig.value?.enabled) return '已停止'
+  if (isPeriodicWaiting.value) return '定时休眠中'
+  return '运行中'
+})
+
+const registerStatusBadgeClass = computed(() => {
+  if (!registerConfig.value?.enabled) return 'bg-muted text-muted-foreground'
+  if (isPeriodicWaiting.value) return 'bg-amber-500/10 text-amber-600'
+  return 'bg-emerald-500/10 text-emerald-600'
+})
+
+const registerStatusDotClass = computed(() => {
+  if (!registerConfig.value?.enabled) return 'bg-stone-400'
+  if (isPeriodicWaiting.value) return 'bg-amber-500'
+  return 'bg-emerald-500 animate-pulse'
+})
+
+function formatNextRunTime(isoString?: string | null) {
+  if (!isoString) return '-'
+  try {
+    const d = new Date(isoString)
+    return d.toLocaleString('zh-CN', { hour12: false })
+  } catch {
+    return String(isoString)
+  }
+}
 
 function getLogLevelClass(level: string) {
   if (level === 'red' || level === 'error') return 'text-rose-400'
@@ -471,8 +667,25 @@ function syncFormFromConfig(cfg: RegisterConfig) {
   registerConfig.value = cfg
   localConfig.value = JSON.parse(JSON.stringify(cfg))
   targetAvailableInput.value = String(cfg.target_available || 10)
+  targetQuotaInput.value = String(cfg.target_quota || 250)
   totalInput.value = String(cfg.total || 10)
   threadsInput.value = String(cfg.threads || 1)
+  periodicIntervalInput.value = String(cfg.periodic_interval_hours || 1)
+  periodicCountInput.value = String(cfg.periodic_count || 1)
+  if (!localConfig.value.roxy) {
+    localConfig.value.roxy = {
+      api_base: 'http://127.0.0.1:50000',
+      api_token: '',
+      workspace_id: '',
+      project_id: '',
+      open_headless: false,
+      create_use_proxy_pool: false,
+      proxy_pool: '',
+      activate_account: true,
+      otp_wait_seconds: 60,
+    }
+  }
+  otpWaitSecondsInput.value = String(localConfig.value.roxy?.otp_wait_seconds || 60)
 }
 
 async function loadData() {
@@ -490,13 +703,28 @@ async function loadData() {
 async function handleStart() {
   actionLoading.value = true
   try {
+    const roxyPayload: RoxyConfig = {
+      api_base: (localConfig.value.roxy?.api_base || 'http://127.0.0.1:50000').trim(),
+      api_token: (localConfig.value.roxy?.api_token || '').trim(),
+      workspace_id: (localConfig.value.roxy?.workspace_id || '').trim(),
+      project_id: (localConfig.value.roxy?.project_id || '').trim(),
+      open_headless: Boolean(localConfig.value.roxy?.open_headless),
+      create_use_proxy_pool: false,
+      proxy_pool: '',
+      activate_account: localConfig.value.roxy?.activate_account !== false,
+      otp_wait_seconds: Math.max(10, Number(otpWaitSecondsInput.value) || 60),
+    }
     const payload: Partial<RegisterConfig> = {
       mode: localConfig.value.mode,
       target_available: Math.max(1, Number(targetAvailableInput.value) || 1),
+      target_quota: Math.max(1, Number(targetQuotaInput.value) || 1),
       total: Math.max(1, Number(totalInput.value) || 1),
       threads: Math.max(1, Number(threadsInput.value) || 1),
+      periodic_interval_hours: Math.max(0.1, Number(periodicIntervalInput.value) || 1.0),
+      periodic_count: Math.max(1, Number(periodicCountInput.value) || 1),
       proxy: (localConfig.value.proxy || '').trim(),
       mail: localConfig.value.mail,
+      roxy: roxyPayload,
     }
     const data = await startRoxyRegister(payload)
     syncFormFromConfig(data.register)
@@ -534,15 +762,30 @@ async function handleReset() {
 async function handleSaveConfig() {
   savingConfig.value = true
   try {
+    const roxyPayload: RoxyConfig = {
+      api_base: (localConfig.value.roxy?.api_base || 'http://127.0.0.1:50000').trim(),
+      api_token: (localConfig.value.roxy?.api_token || '').trim(),
+      workspace_id: (localConfig.value.roxy?.workspace_id || '').trim(),
+      project_id: (localConfig.value.roxy?.project_id || '').trim(),
+      open_headless: Boolean(localConfig.value.roxy?.open_headless),
+      create_use_proxy_pool: false,
+      proxy_pool: '',
+      activate_account: localConfig.value.roxy?.activate_account !== false,
+      otp_wait_seconds: Math.max(10, Number(otpWaitSecondsInput.value) || 60),
+    }
     const payload: Partial<RegisterConfig> = {
       mode: localConfig.value.mode,
       target_available: Math.max(1, Number(targetAvailableInput.value) || 1),
+      target_quota: Math.max(1, Number(targetQuotaInput.value) || 1),
       total: Math.max(1, Number(totalInput.value) || 1),
       threads: Math.max(1, Number(threadsInput.value) || 1),
+      periodic_interval_hours: Math.max(0.1, Number(periodicIntervalInput.value) || 1.0),
+      periodic_count: Math.max(1, Number(periodicCountInput.value) || 1),
       proxy: (localConfig.value.proxy || '').trim(),
       mail: localConfig.value.mail,
+      roxy: roxyPayload,
     }
-    const data = await saveSharedRegisterConfig(payload)
+    const data = await saveRoxyRegisterConfig(payload)
     syncFormFromConfig(data.register)
   } catch (err) {
     console.error('保存注册配置失败', err)

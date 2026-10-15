@@ -374,6 +374,30 @@ class RoxyBrowserClient:
 
         return {"ok": False, "items": [], "errors": errors}
 
+    def ensure_workspace(self) -> tuple[str | int, str | int]:
+        """确保拿到 workspaceId 与 projectId；若未配置则向 Roxy API 自动查询。"""
+        wid = _workspace_id_value()
+        pid = _project_id_value()
+        if wid:
+            return wid, pid
+        try:
+            res = self.list_workspaces()
+            if res.get("ok") and res.get("items"):
+                first = res["items"][0]
+                auto_wid = first.get("workspaceId") or first.get("id") or ""
+                auto_pid = first.get("projectId") or ""
+                if auto_wid:
+                    wid = int(auto_wid) if str(auto_wid).isdigit() else auto_wid
+                    setattr(_cfg, "ROXY_WORKSPACE_ID", str(auto_wid))
+                    logger.info("[Roxy] 已自动识别默认工作区 ID: %s (%s)", wid, first.get("name") or first.get("workspaceName"))
+                if not pid and auto_pid:
+                    pid = int(auto_pid) if str(auto_pid).isdigit() else auto_pid
+                    setattr(_cfg, "ROXY_PROJECT_ID", str(auto_pid))
+                    logger.info("[Roxy] 已自动识别默认项目 ID: %s (%s)", pid, first.get("projectName"))
+        except Exception as exc:
+            logger.warning("[Roxy] 自动查询工作区列表失败: %s", exc)
+        return wid, pid
+
     def create_profile(self, payload: dict | None = None) -> str:
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
         random_name_enabled = bool(getattr(_cfg, "ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True))
@@ -394,11 +418,10 @@ class RoxyBrowserClient:
             default_os_version = str(getattr(_cfg, "ROXY_DEFAULT_OS_VERSION", "") or "").strip()
             if default_os_version:
                 body.setdefault("osVersion", default_os_version)
-        workspace_id = _workspace_id_value()
+        workspace_id, project_id = self.ensure_workspace()
         if workspace_id:
             # Roxy 官方 /browser/create 要求 workspaceId。
             body.setdefault("workspaceId", workspace_id)
-        project_id = _project_id_value()
         if project_id:
             body.setdefault("projectId", project_id)
         if bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)) and not body.get("proxyInfo"):
@@ -471,7 +494,8 @@ class RoxyBrowserClient:
         path = str(_cfg.ROXY_OPEN_PATH).format(profile_id=pid)
         params = dict(getattr(_cfg, "ROXY_OPEN_EXTRA_PARAMS", {}) or {})
         # Roxy 官方 /browser/open body: {workspaceId, dirId, args, forceOpen, headless}
-        params.setdefault("workspaceId", _workspace_id_value())
+        wid, _ = self.ensure_workspace()
+        params.setdefault("workspaceId", wid)
         params.setdefault("dirId", int(pid) if str(pid).isdigit() else pid)
         params.setdefault("args", [])
         params.setdefault("forceOpen", True)
@@ -513,8 +537,9 @@ class RoxyBrowserClient:
             return
         path = str(_cfg.ROXY_CLOSE_PATH).format(profile_id=profile_id)
         try:
+            wid, _ = self.ensure_workspace()
             body = {
-                "workspaceId": _workspace_id_value(),
+                "workspaceId": wid,
                 "dirId": int(profile_id) if str(profile_id).isdigit() else profile_id,
             }
             self.request(
@@ -533,8 +558,9 @@ class RoxyBrowserClient:
         path = str(getattr(_cfg, "ROXY_DELETE_PATH", "/browser/delete")).format(profile_id=profile_id)
         method = str(getattr(_cfg, "ROXY_DELETE_METHOD", "POST") or "POST")
         try:
+            wid, _ = self.ensure_workspace()
             body = {
-                "workspaceId": _workspace_id_value(),
+                "workspaceId": wid,
                 "dirIds": [int(profile_id) if str(profile_id).isdigit() else profile_id],
             }
             self.request(

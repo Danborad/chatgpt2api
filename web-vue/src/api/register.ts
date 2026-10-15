@@ -13,6 +13,9 @@ export interface RegisterStats {
   pause_reason?: string | null
   current_quota?: number
   current_available?: number
+  retry_at?: string | null
+  periodic_round?: number
+  next_round_at?: string | null
 }
 
 export interface RegisterLogItem {
@@ -52,25 +55,45 @@ export interface MailSettings {
   providers: MailProviderConfig[]
 }
 
+export interface RoxyConfig {
+  api_base: string
+  api_token: string
+  workspace_id: string
+  project_id: string
+  profile_id?: string
+  open_headless: boolean
+  create_use_proxy_pool: boolean
+  proxy_pool: string
+  activate_account: boolean
+  otp_wait_seconds: number
+}
+
 export interface RegisterConfig {
   mail: MailSettings
   proxy: string
   total: number
   threads: number
-  mode: 'total' | 'quota' | 'available' | string
+  mode: 'total' | 'quota' | 'available' | 'periodic' | string
   target_quota: number
   target_available: number
   check_interval: number
+  periodic_interval_hours?: number
+  periodic_count?: number
   schedule_enabled: boolean
   schedule_start: string
   schedule_end: string
   enabled: boolean
+  roxy?: RoxyConfig
   stats?: RegisterStats
   logs?: RegisterLogItem[]
 }
 
 export async function fetchRoxyRegisterConfig(): Promise<{ register: RegisterConfig }> {
   return apiClient.get('/api/register/roxy')
+}
+
+export async function saveRoxyRegisterConfig(config: Partial<RegisterConfig>): Promise<{ register: RegisterConfig }> {
+  return apiClient.post('/api/register/roxy', config)
 }
 
 export async function startRoxyRegister(config?: Partial<RegisterConfig>): Promise<{ register: RegisterConfig }> {

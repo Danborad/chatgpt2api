@@ -1,4 +1,20 @@
 services:
+  sentinel-solver:
+    build:
+      context: ./sentinel_solver
+      dockerfile: Dockerfile
+    image: chatgpt2api-sentinel-solver:local
+    container_name: chatgpt2api-sentinel-solver
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - HOST=127.0.0.1
+      - PORT=35780
+      - SENTINEL_SOLVER_KEY=${SENTINEL_SOLVER_KEY:-solver-secret-key-1314}
+      - SENTINEL_SOLVER_PROXY=${SENTINEL_SOLVER_PROXY:-http://127.0.0.1:7890}
+      - SENTINEL_SOLVER_TIMEZONE=Asia/Shanghai
+      - SENTINEL_SOLVER_HEADLESS=true
+
   app:
     build:
       context: .
@@ -9,6 +25,8 @@ services:
     # Roxy 指纹浏览器本地调试端口只监听 127.0.0.1，必须用 host 网络才能被容器内的 Selenium 访问。
     network_mode: host
     command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${CHATGPT2API_PORT:-3005}", "--access-log"]
+    depends_on:
+      - sentinel-solver
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
@@ -22,10 +40,12 @@ services:
       CHATGPT2API_BASE_URL: ${CHATGPT2API_BASE_URL:-}
       CHATGPT2API_THREAD_TOKENS: ${CHATGPT2API_THREAD_TOKENS:-120}
       TZ: ${TZ:-Asia/Shanghai}
+      SENTINEL_SOLVER_URL: http://127.0.0.1:35780
+      SENTINEL_SOLVER_KEY: ${SENTINEL_SOLVER_KEY:-solver-secret-key-1314}
       ROXY_API_BASE: ${ROXY_API_BASE:-http://127.0.0.1:50000}
       ROXY_API_TOKEN: ${ROXY_API_TOKEN:-}
       ROXY_WORKSPACE_ID: ${ROXY_WORKSPACE_ID:-}
       ROXY_PROJECT_ID: ${ROXY_PROJECT_ID:-}
       ROXY_OPEN_HEADLESS: ${ROXY_OPEN_HEADLESS:-false}
-      ROXY_CREATE_USE_PROXY_POOL: ${ROXY_CREATE_USE_PROXY_POOL:-true}
+      ROXY_CREATE_USE_PROXY_POOL: ${ROXY_CREATE_USE_PROXY_POOL:-false}
       ROXY_PROXY_POOL: ${ROXY_PROXY_POOL:-}

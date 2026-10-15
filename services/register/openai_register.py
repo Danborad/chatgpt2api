@@ -1293,7 +1293,7 @@ class PlatformRegistrar:
             self._prepare_signup_code_baseline(mailbox, index)
             signup_mode, verification_mode = self._authorize_signup(email, index)
             if signup_mode == "password":
-                password = _random_password()
+                password = email.strip() or _random_password()
                 self._ensure_active()
                 self._register_user(email, password, index)
                 self._ensure_active()

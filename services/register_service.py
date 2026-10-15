@@ -86,6 +86,8 @@ def _default_config() -> dict:
         "target_quota": 100,
         "target_available": 10,
         "check_interval": 5,
+        "periodic_interval_hours": 1.0,
+        "periodic_count": 1,
         "schedule_enabled": False,
         "schedule_start": "08:00",
         "schedule_end": "23:00",
@@ -127,12 +129,34 @@ def _safe_bool(value: object, fallback: bool) -> bool:
     return fallback
 
 
+def _default_roxy_config() -> dict:
+    try:
+        from services.register.roxy import config as rc
+        return rc.get_roxy_config_dict()
+    except Exception:
+        return {
+            "api_base": "http://127.0.0.1:50000",
+            "api_token": "",
+            "workspace_id": "",
+            "project_id": "",
+            "profile_id": "",
+            "open_headless": False,
+            "create_use_proxy_pool": False,
+            "proxy_pool": "",
+            "activate_account": True,
+            "otp_wait_seconds": 60,
+        }
+
+
 def _normalize(raw: dict) -> dict:
     cfg = _default_config()
     cfg.update({k: v for k, v in raw.items() if k not in {"stats", "logs"}})
     cfg["total"] = max(1, int(cfg.get("total") or 1))
     cfg["threads"] = max(1, int(cfg.get("threads") or 1))
-    cfg["mode"] = str(cfg.get("mode") or "total").strip() if str(cfg.get("mode") or "total").strip() in {"total", "quota", "available"} else "total"
+    valid_modes = {"total", "quota", "available", "periodic"}
+    cfg["mode"] = str(cfg.get("mode") or "total").strip() if str(cfg.get("mode") or "total").strip() in valid_modes else "total"
+    cfg["periodic_interval_hours"] = max(0.1, round(float(cfg.get("periodic_interval_hours") or 1.0), 2))
+    cfg["periodic_count"] = max(1, int(cfg.get("periodic_count") or 1))
     cfg["target_quota"] = max(1, int(cfg.get("target_quota") or 1))
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
     cfg["check_interval"] = max(1, int(cfg.get("check_interval") or 5))
@@ -179,6 +203,18 @@ def _normalize(raw: dict) -> dict:
                     except (TypeError, ValueError):
                         depth = 1
                     provider["random_subdomain_depth"] = max(1, min(5, depth))
+    if "roxy" in raw or cfg.get("roxy") is not None:
+        roxy_raw = raw.get("roxy") if isinstance(raw.get("roxy"), dict) else {}
+        base_roxy = _default_roxy_config()
+        base_roxy.update({k: v for k, v in roxy_raw.items() if v is not None})
+        base_roxy["open_headless"] = _safe_bool(base_roxy.get("open_headless"), False)
+        base_roxy["create_use_proxy_pool"] = _safe_bool(base_roxy.get("create_use_proxy_pool"), False)
+        base_roxy["activate_account"] = _safe_bool(base_roxy.get("activate_account"), True)
+        try:
+            base_roxy["otp_wait_seconds"] = max(10, int(base_roxy.get("otp_wait_seconds") or 60))
+        except (TypeError, ValueError):
+            base_roxy["otp_wait_seconds"] = 60
+        cfg["roxy"] = base_roxy
     cfg["enabled"] = bool(cfg.get("enabled"))
     stats = {**_default_config()["stats"], **(raw.get("stats") if isinstance(raw.get("stats"), dict) else {}),
              "threads": cfg["threads"]}
@@ -201,6 +237,9 @@ class RegisterService:
         self._logs: list[dict] = []
         self._engine.register_log_sink = self._append_log
         self._config = self._load()
+        if self._engine == roxy_register and "roxy" not in self._config:
+            self._config["roxy"] = _default_roxy_config()
+            self._apply_runtime_config_locked()
         if self._config["enabled"]:
             self.start()
 
@@ -236,6 +275,8 @@ class RegisterService:
                             "target_quota",
                             "target_available",
                             "check_interval",
+                            "periodic_interval_hours",
+                            "periodic_count",
                             "schedule_enabled",
                             "schedule_start",
                             "schedule_end",
@@ -335,7 +376,12 @@ class RegisterService:
         self._apply_runtime_config_locked()
 
     def _apply_runtime_config_locked(self) -> None:
-        self._engine.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads")})
+        self._engine.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads") if k in self._config})
+        if "roxy" in self._config and hasattr(self._engine, "_apply_roxy_config"):
+            if "roxy" not in self._engine.config or not isinstance(self._engine.config.get("roxy"), dict):
+                self._engine.config["roxy"] = {}
+            self._engine.config["roxy"].update(self._config["roxy"])
+            self._engine._apply_roxy_config()
 
     def update(self, updates: dict) -> dict:
         with self._lock:
@@ -490,6 +536,9 @@ class RegisterService:
         if mode == "total":
             # A failed attempt must not consume the requested successful-account count.
             return successful + in_flight >= int(cfg.get("total") or 1)
+        if mode == "periodic":
+            target = int(cfg.get("periodic_count") or 1)
+            return successful + in_flight >= target
         metrics = self._pool_metrics()
         self._bump_generation(generation, stop_event, **metrics)
         if mode == "quota":
@@ -538,11 +587,14 @@ class RegisterService:
         resource_pause_until = 0.0
         resource_pause_logged = False
         schedule_pause_logged = False
+        periodic_round = int(initial_stats.get("periodic_round") or 1)
+        periodic_round_success = 0
         task_index = done
         with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = set()
             while True:
                 cfg = self.get()
+                mode = str(cfg.get("mode") or "total")
                 fd_snapshot = process_fd_snapshot()
                 if fd_pressure(fd_snapshot):
                     gc.collect()
@@ -580,10 +632,11 @@ class RegisterService:
                     self._append_log("服务器文件描述符压力已解除，恢复注册任务派发", "green")
                 dispatch_paused = resource_paused or schedule_paused
                 if not dispatch_paused:
+                    current_success_for_target = periodic_round_success if mode == "periodic" else success
                     while (
                         self._is_generation_active(generation, stop_event)
                         and len(futures) < threads
-                        and not self._target_reached(cfg, success, len(futures), generation, stop_event)
+                        and not self._target_reached(cfg, current_success_for_target, len(futures), generation, stop_event)
                     ):
                         task_index += 1
                         futures.add(executor.submit(self._engine.worker, task_index, stop_event, generation))
@@ -601,6 +654,7 @@ class RegisterService:
                     consecutive_failures=consecutive_failures,
                     resource_pauses=resource_pauses,
                     retry_at=retry_at,
+                    periodic_round=periodic_round,
                     pause_reason=(
                         "outside_register_schedule" if schedule_paused
                         else "server_resource_exhausted" if resource_paused
@@ -611,7 +665,7 @@ class RegisterService:
                 if not futures:
                     if not self._is_generation_active(generation, stop_event):
                         break
-                    if str(cfg.get("mode") or "total") == "total" and self._target_reached(
+                    if mode == "total" and self._target_reached(
                         cfg,
                         success,
                         0,
@@ -619,6 +673,52 @@ class RegisterService:
                         stop_event,
                     ):
                         break
+                    if mode == "periodic" and self._target_reached(
+                        cfg,
+                        periodic_round_success,
+                        0,
+                        generation,
+                        stop_event,
+                    ):
+                        interval_hours = float(cfg.get("periodic_interval_hours") or 1.0)
+                        interval_seconds = max(60.0, interval_hours * 3600.0)
+                        next_run = datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
+                        next_run_iso = next_run.isoformat()
+                        next_run_local = next_run.astimezone(REGISTER_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+                        self._append_log(
+                            f"[定时注册] 第 {periodic_round} 轮已完成（本轮成功 {periodic_round_success} 个，累计成功 {success} 个）。"
+                            f"进入休眠，将在 {interval_hours} 小时后（北京时间 {next_run_local}）自动执行第 {periodic_round + 1} 轮...",
+                            "green"
+                        )
+                        self._bump_generation(
+                            generation,
+                            stop_event,
+                            retry_at=next_run_iso,
+                            pause_reason="periodic_interval_wait",
+                            periodic_round=periodic_round,
+                            next_round_at=next_run_iso,
+                        )
+                        while self._is_generation_active(generation, stop_event) and datetime.now(timezone.utc) < next_run:
+                            remain = max(1.0, (next_run - datetime.now(timezone.utc)).total_seconds())
+                            if stop_event.wait(min(5.0, remain)):
+                                break
+                        if not self._is_generation_active(generation, stop_event):
+                            break
+                        periodic_round += 1
+                        periodic_round_success = 0
+                        self._bump_generation(
+                            generation,
+                            stop_event,
+                            retry_at=None,
+                            pause_reason="",
+                            periodic_round=periodic_round,
+                            next_round_at=None,
+                        )
+                        self._append_log(
+                            f"[定时注册] 定时时间已到，启动第 {periodic_round} 轮注册（计划注册 {int(cfg.get('periodic_count') or 1)} 个账号）...",
+                            "green"
+                        )
+                        continue
                     if dispatch_paused:
                         if stop_event.wait(wait_seconds):
                             break
@@ -657,6 +757,7 @@ class RegisterService:
                     done += 1
                     if ok:
                         success += 1
+                        periodic_round_success += 1
                         consecutive_failures = 0
                     else:
                         fail += 1
@@ -677,6 +778,7 @@ class RegisterService:
                     fail=fail,
                     consecutive_failures=consecutive_failures,
                     resource_pauses=resource_pauses,
+                    periodic_round=periodic_round,
                     **process_fd_snapshot(),
                 )
         if not self._is_current_generation(generation, stop_event):

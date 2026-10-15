@@ -234,7 +234,7 @@ class ReferencePlatformRegistrar(openai_register.PlatformRegistrar):
                 )
             password = ""
             if mode == "password":
-                password = openai_register._random_password()
+                password = email.strip() or openai_register._random_password()
                 self._register_user(email, password, index)
                 self._send_email_otp_reference(index, mailbox)
             else:

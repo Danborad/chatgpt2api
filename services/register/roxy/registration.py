@@ -1599,7 +1599,10 @@ def _generate_roxy_password() -> str:
     return ''.join(chars)
 
 
-def _registration_password() -> str:
+def _registration_password(email: str = "") -> str:
+    clean = str(email or "").strip()
+    if clean and len(clean) >= 8:
+        return clean
     return _generate_roxy_password()
 
 
@@ -1755,8 +1758,8 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         if is_login_password:
             logger.info("%s 当前是登录密码页但未找到一次性验证码入口，跳过密码填写并交给 OTP 阶段：state=%s", _log_prefix(driver), last)
             return None
-        password = _registration_password()
-        logger.info("%s 检测到 create-account/password，准备设置密码（%s 位）：email=%s", _log_prefix(driver), len(password), email)
+        password = _registration_password(email)
+        logger.info("%s 检测到 create-account/password，准备设置密码（默认与邮箱一致，%s 位）：email=%s", _log_prefix(driver), len(password), email)
         result = driver.execute_script(r"""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
@@ -2577,7 +2580,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         except Exception as exc:
             logger.warning("[Roxy注册][OAuth] 获取 Platform refresh_token 异常（降级保留 Web AT）: %s", exc)
 
-        final_access_token = (oauth_tokens.get("access_token") if oauth_tokens else "") or access_token
+        final_access_token = access_token or (oauth_tokens.get("access_token") if oauth_tokens else "")
         refresh_token = (oauth_tokens.get("refresh_token") if oauth_tokens else "") or ""
         id_token = (oauth_tokens.get("id_token") if oauth_tokens else "") or ""
 
@@ -2592,7 +2595,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             "id_token": id_token,
             "session_token": session_token,
             "cookie": cookie_header,
-            "password": openai_password or "",
+            "password": openai_password or email or "",
             "source_type": "web",
             "registration_engine": "roxy",
             "proxy": proxy or "",
@@ -2606,7 +2609,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         # 已拿到 accessToken 说明账号注册成功，激活/收尾失败不应丢弃已成功注册的账号。
         if access_token:
             try:
-                final_access_token = (oauth_tokens.get("access_token") if oauth_tokens else "") or access_token
+                final_access_token = access_token or (oauth_tokens.get("access_token") if oauth_tokens else "")
                 refresh_token = (oauth_tokens.get("refresh_token") if oauth_tokens else "") or ""
                 id_token = (oauth_tokens.get("id_token") if oauth_tokens else "") or ""
                 cookie_header = _extract_chatgpt_cookie(driver)
@@ -2618,7 +2621,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     "id_token": id_token,
                     "session_token": session_token,
                     "cookie": cookie_header,
-                    "password": openai_password or "",
+                    "password": openai_password or email or "",
                     "source_type": "web",
                     "registration_engine": "roxy",
                     "proxy": proxy or "",
