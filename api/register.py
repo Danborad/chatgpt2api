@@ -27,6 +27,7 @@ class RegisterConfigRequest(BaseModel):
     schedule_enabled: bool | None = None
     schedule_start: str | None = None
     schedule_end: str | None = None
+    roxy: dict | None = None
 
 
 class OutlookPoolResetRequest(BaseModel):
@@ -72,6 +73,9 @@ def create_router() -> APIRouter:
             "schedule_end",
         ):
             snapshot[key] = shared[key]
+        if "roxy" not in snapshot or not isinstance(snapshot.get("roxy"), dict):
+            from services.register.roxy import config as rc
+            snapshot["roxy"] = rc.get_roxy_config_dict()
         # 日志只推最近 80 条，降低 SSE 传输与前端渲染开销。
         if isinstance(snapshot.get("logs"), list):
             snapshot["logs"] = snapshot["logs"][-80:]
@@ -86,7 +90,9 @@ def create_router() -> APIRouter:
     async def update_register_config(body: RegisterConfigRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         updates = body.model_dump(exclude_none=True)
-        result = register_service.update(updates)
+        if "roxy" in updates and updates["roxy"] is not None:
+            roxy_register_service.update({"roxy": updates["roxy"]})
+        result = register_service.update({k: v for k, v in updates.items() if k != "roxy"})
         schedule_updates = {
             key: result[key]
             for key in ("schedule_enabled", "schedule_start", "schedule_end")
@@ -175,6 +181,20 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return {"register": roxy_register_snapshot()}
 
+    @router.post("/api/register/roxy")
+    async def update_roxy_register_config(
+        body: RegisterConfigRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        updates = body.model_dump(exclude_none=True)
+        if "roxy" in updates and updates["roxy"] is not None:
+            roxy_register_service.update({"roxy": updates["roxy"]})
+        shared_updates = {k: v for k, v in updates.items() if k != "roxy"}
+        if shared_updates:
+            register_service.update(shared_updates)
+        return {"register": roxy_register_snapshot()}
+
     @router.post("/api/register/roxy/start")
     async def start_roxy_register(
             body: RegisterConfigRequest | None = None,
@@ -183,7 +203,11 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         updates = body.model_dump(exclude_none=True) if body is not None else None
         if updates:
-            register_service.update(updates)
+            if "roxy" in updates and updates["roxy"] is not None:
+                roxy_register_service.update({"roxy": updates["roxy"]})
+            shared_updates = {k: v for k, v in updates.items() if k != "roxy"}
+            if shared_updates:
+                register_service.update(shared_updates)
         roxy_register_service.start(register_service.shared_config_snapshot())
         return {"register": roxy_register_snapshot()}
 

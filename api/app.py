@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from api import accounts, ai, image_tasks, prompts, register, system
 from api.errors import install_exception_handlers
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
             backup_service.stop()
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
     install_exception_handlers(app)
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -133,6 +135,12 @@ def create_app() -> FastAPI:
         asset = resolve_web_asset(full_path)
         if asset is None:
             raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(asset)
+        headers: dict[str, str] = {}
+        clean = full_path.strip("/")
+        if clean.startswith("assets/") or clean.startswith("vendor/"):
+            headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif asset.name == "index.html":
+            headers["Cache-Control"] = "no-cache"
+        return FileResponse(asset, headers=headers)
 
     return app

@@ -44,20 +44,8 @@ config = {
     "total": 10,
     "threads": 1,
 }
-# 合并 RoxyBrowser 专用配置；RegisterService 只会覆写 mail/proxy/total/threads，
-# 其余 Roxy 配置项保持这里的默认值，也可在启动前手动调整 config["roxy"]。
-config["roxy"] = {
-    "api_base": roxy_config.ROXY_API_BASE,
-    "api_token": roxy_config.ROXY_API_TOKEN,
-    "workspace_id": roxy_config.ROXY_WORKSPACE_ID,
-    "project_id": roxy_config.ROXY_PROJECT_ID,
-    "profile_id": roxy_config.ROXY_PROFILE_ID,
-    "open_headless": roxy_config.ROXY_OPEN_HEADLESS,
-    "one_profile_per_account": roxy_config.ROXY_ONE_PROFILE_PER_ACCOUNT,
-    "delete_profile_after_run": roxy_config.ROXY_DELETE_PROFILE_AFTER_RUN,
-    "keep_browser_open": roxy_config.ROXY_KEEP_BROWSER_OPEN,
-    "create_use_proxy_pool": roxy_config.ROXY_CREATE_USE_PROXY_POOL,
-}
+# 合并 RoxyBrowser 专用配置；RegisterService 会覆写 mail/proxy/total/threads 以及 roxy 专有配置。
+config["roxy"] = roxy_config.get_roxy_config_dict()
 stats_lock = threading.Lock()
 stats = {"done": 0, "success": 0, "fail": 0, "start_time": 0.0}
 register_log_sink = None
@@ -82,10 +70,36 @@ def _apply_roxy_config() -> None:
         "delete_profile_after_run": "ROXY_DELETE_PROFILE_AFTER_RUN",
         "keep_browser_open": "ROXY_KEEP_BROWSER_OPEN",
         "create_use_proxy_pool": "ROXY_CREATE_USE_PROXY_POOL",
+        "activate_account": "ROXY_ACTIVATE_ACCOUNT",
+        "otp_wait_seconds": "ROXY_OTP_WAIT_SECONDS",
     }
     for key, attr in mapping.items():
-        if key in overrides:
-            setattr(roxy_config, attr, overrides[key])
+        if key in overrides and overrides[key] is not None:
+            val = overrides[key]
+            if key in (
+                "open_headless",
+                "one_profile_per_account",
+                "delete_profile_after_run",
+                "keep_browser_open",
+                "create_use_proxy_pool",
+                "activate_account",
+            ):
+                val = bool(val)
+            elif key == "otp_wait_seconds":
+                try:
+                    val = max(10, int(val or 60))
+                except (TypeError, ValueError):
+                    val = 60
+            setattr(roxy_config, attr, val)
+
+    if "proxy_pool" in overrides and overrides["proxy_pool"] is not None:
+        pool_raw = overrides["proxy_pool"]
+        if isinstance(pool_raw, str):
+            roxy_config.ROXY_PROXY_POOL = [
+                line.strip() for line in pool_raw.replace(";", "\n").splitlines() if line.strip()
+            ]
+        elif isinstance(pool_raw, list):
+            roxy_config.ROXY_PROXY_POOL = [str(x).strip() for x in pool_raw if str(x).strip()]
 
 
 def _random_name() -> str:

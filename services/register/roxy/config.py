@@ -158,6 +158,22 @@ def _parse_proxy_pool() -> list[str]:
 ROXY_PROXY_POOL: list[str] = _parse_proxy_pool()
 
 
+def get_roxy_config_dict() -> dict:
+    """获取当前 Roxy 配置的序列化字典，用于 WebUI 显示与默认值回填。"""
+    return {
+        "api_base": ROXY_API_BASE,
+        "api_token": ROXY_API_TOKEN,
+        "workspace_id": ROXY_WORKSPACE_ID,
+        "project_id": ROXY_PROJECT_ID,
+        "profile_id": ROXY_PROFILE_ID,
+        "open_headless": bool(ROXY_OPEN_HEADLESS),
+        "create_use_proxy_pool": bool(ROXY_CREATE_USE_PROXY_POOL),
+        "proxy_pool": "\n".join(ROXY_PROXY_POOL) if ROXY_PROXY_POOL else "",
+        "activate_account": bool(ROXY_ACTIVATE_ACCOUNT),
+        "otp_wait_seconds": int(ROXY_OTP_WAIT_SECONDS or 60),
+    }
+
+
 def pick_proxy() -> str:
     """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
     return random.choice(ROXY_PROXY_POOL) if ROXY_PROXY_POOL else ""
