@@ -155,7 +155,8 @@ def _normalize(raw: dict) -> dict:
     cfg["threads"] = max(1, int(cfg.get("threads") or 1))
     valid_modes = {"total", "quota", "available", "periodic"}
     cfg["mode"] = str(cfg.get("mode") or "total").strip() if str(cfg.get("mode") or "total").strip() in valid_modes else "total"
-    cfg["periodic_interval_hours"] = max(0.1, round(float(cfg.get("periodic_interval_hours") or 1.0), 2))
+    raw_interval = max(0.1, round(float(cfg.get("periodic_interval_hours") or 1.0), 2))
+    cfg["periodic_interval_hours"] = int(raw_interval) if raw_interval.is_integer() else raw_interval
     cfg["periodic_count"] = max(1, int(cfg.get("periodic_count") or 1))
     cfg["target_quota"] = max(1, int(cfg.get("target_quota") or 1))
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
