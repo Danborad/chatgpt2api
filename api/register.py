@@ -24,6 +24,8 @@ class RegisterConfigRequest(BaseModel):
     target_quota: int | None = None
     target_available: int | None = None
     check_interval: int | None = None
+    periodic_interval_hours: float | None = None
+    periodic_count: int | None = None
     schedule_enabled: bool | None = None
     schedule_start: str | None = None
     schedule_end: str | None = None
@@ -49,6 +51,8 @@ def create_router() -> APIRouter:
             "target_quota",
             "target_available",
             "check_interval",
+            "periodic_interval_hours",
+            "periodic_count",
             "schedule_enabled",
             "schedule_start",
             "schedule_end",
@@ -68,6 +72,8 @@ def create_router() -> APIRouter:
             "target_quota",
             "target_available",
             "check_interval",
+            "periodic_interval_hours",
+            "periodic_count",
             "schedule_enabled",
             "schedule_start",
             "schedule_end",
