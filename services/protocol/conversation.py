@@ -2582,6 +2582,10 @@ def _generate_single_image(
                 }
             )
             fallback_reference = proxy_settings.get_fallback_proxy_reference()
+            # 如果主出口已配置代理，而备用出口配置为 direct（无备用代理节点），切到直连必然被墙或 403，因此跳过切直连。
+            current_egress_is_proxy = bool(backend and backend.proxy_profile and backend.proxy_profile.proxy_url)
+            if fallback_reference == "direct" and current_egress_is_proxy:
+                fallback_reference = ""
             if early_connection_failure and fallback_reference and not fallback_retry_used:
                 fallback_retry_used = True
                 fallback_retry_pending = True

@@ -62,6 +62,14 @@ class ChatRequirements:
 DEFAULT_CLIENT_VERSION = "prod-a194cd50d4416d3c0b47c740f206b12ce60f5887"
 DEFAULT_CLIENT_BUILD_NUMBER = "6708908"
 DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
+
+_BOOTSTRAP_CACHE: dict[str, Any] = {
+    "sources": [DEFAULT_POW_SCRIPT],
+    "build": "",
+    "updated_at": 0.0,
+}
+_BOOTSTRAP_LOCK = threading.Lock()
+_BOOTSTRAP_TTL_SECONDS = 21600.0  # 6 小时刷新一次即可
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
 CODEX_RESPONSES_MODEL = "gpt-5.5"
 SEARCH_MODEL = "gpt-5-5"
@@ -269,14 +277,8 @@ class OpenAIBackendAPI:
             "Pragma": "no-cache",
             "Priority": "u=1, i",
             "Sec-Ch-Ua": self.fp["sec-ch-ua"],
-            "Sec-Ch-Ua-Arch": '"x86"',
-            "Sec-Ch-Ua-Bitness": '"64"',
-            "Sec-Ch-Ua-Full-Version": '"143.0.3650.96"',
-            "Sec-Ch-Ua-Full-Version-List": '"Microsoft Edge";v="143.0.3650.96", "Chromium";v="143.0.7499.147", "Not A(Brand";v="24.0.0.0"',
             "Sec-Ch-Ua-Mobile": self.fp["sec-ch-ua-mobile"],
-            "Sec-Ch-Ua-Model": '""',
             "Sec-Ch-Ua-Platform": self.fp["sec-ch-ua-platform"],
-            "Sec-Ch-Ua-Platform-Version": '"19.0.0"',
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
@@ -329,14 +331,17 @@ class OpenAIBackendAPI:
         fp.setdefault(
             "user-agent",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+            "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
         )
+        ua = fp["user-agent"]
+        m = re.search(r"Chrome/(\d+)", ua)
+        major = m.group(1) if m else "153"
         fp.setdefault("impersonate", "chrome120")
         fp.setdefault("oai-device-id", new_uuid())
         fp.setdefault("oai-session-id", new_uuid())
-        fp.setdefault("sec-ch-ua", '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"')
+        fp.setdefault("sec-ch-ua", f'"Not(A:Brand";v="99", "Google Chrome";v="{major}", "Chromium";v="{major}"')
         fp.setdefault("sec-ch-ua-mobile", "?0")
-        fp.setdefault("sec-ch-ua-platform", '"Linux"')
+        fp.setdefault("sec-ch-ua-platform", '"Linux"' if "linux" in ua.lower() else '"Windows"')
         return fp
 
     def _runtime_timezone_info(self) -> tuple[str, int]:
@@ -348,12 +353,10 @@ class OpenAIBackendAPI:
         return get_runtime_timezone_info(proxy_url)
 
     def _headers(self, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        """构造请求头，并补上 web 端要求的 target path/route。"""
+        """构造请求头（对齐真实浏览器，不携带易触发 403 拦截的非标 Target 头）。"""
         headers = dict(self.session.headers)
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
-        headers["X-OpenAI-Target-Path"] = path
-        headers["X-OpenAI-Target-Route"] = path
         if extra:
             headers.update(extra)
         return headers
@@ -3735,9 +3738,21 @@ class OpenAIBackendAPI:
         finally:
             response.close()
 
-    def _bootstrap(self, timeout_secs: float = 30.0) -> None:
-        """预热首页，并提取 PoW 相关脚本引用。"""
-        # 注意：绝不能带 Authorization 访问 chatgpt.com/，否则 Cloudflare 会直接下发 403 质询
+    def _bootstrap(self, timeout_secs: float = 15.0) -> None:
+        """预热首页并提取 PoW 脚本引用（全局缓存 + 异常静默降级）。
+
+        说明：
+        - chatgpt.com/ 根路径受 Cloudflare WAF 严格防护，高频访问极易触发 403 质询盾。
+        - 通过全局内存缓存（TTL 6小时）避免每次生图都发无意义 GET 请求。
+        - 即使偶发 403/超时，仅记录 warning 并静默降级至缓存/内置脚本源，绝不阻断生图链路。
+        """
+        now = time.monotonic()
+        with _BOOTSTRAP_LOCK:
+            if _BOOTSTRAP_CACHE["sources"] and (now - float(_BOOTSTRAP_CACHE["updated_at"]) < _BOOTSTRAP_TTL_SECONDS):
+                self.pow_script_sources = list(_BOOTSTRAP_CACHE["sources"])
+                self.pow_data_build = str(_BOOTSTRAP_CACHE["build"] or "")
+                return
+
         auth = self.session.headers.pop("Authorization", None)
         try:
             response = self.session.get(
@@ -3745,13 +3760,31 @@ class OpenAIBackendAPI:
                 headers=self._bootstrap_headers(),
                 timeout=timeout_secs,
             )
-            ensure_ok(response, "bootstrap", credential_scope="public")
-            self.pow_script_sources, self.pow_data_build = parse_pow_resources(response.text)
-            if not self.pow_script_sources:
-                self.pow_script_sources = [DEFAULT_POW_SCRIPT]
+            if response.status_code == 200 and response.text:
+                sources, build = parse_pow_resources(response.text)
+                if sources:
+                    with _BOOTSTRAP_LOCK:
+                        _BOOTSTRAP_CACHE["sources"] = sources
+                        _BOOTSTRAP_CACHE["build"] = build
+                        _BOOTSTRAP_CACHE["updated_at"] = time.monotonic()
+            else:
+                logger.warning({
+                    "event": "bootstrap_refresh_warning",
+                    "status": response.status_code,
+                    "msg": "Bootstrap GET chatgpt.com/ returned non-200, fallback to cached resources",
+                })
+        except Exception as exc:
+            logger.warning({
+                "event": "bootstrap_refresh_error",
+                "error": str(exc),
+                "msg": "Bootstrap GET chatgpt.com/ failed, fallback to cached resources",
+            })
         finally:
             if auth:
                 self.session.headers["Authorization"] = auth
+            with _BOOTSTRAP_LOCK:
+                self.pow_script_sources = list(_BOOTSTRAP_CACHE["sources"]) or [DEFAULT_POW_SCRIPT]
+                self.pow_data_build = str(_BOOTSTRAP_CACHE["build"] or "")
 
     def _get_chat_requirements(
             self,
