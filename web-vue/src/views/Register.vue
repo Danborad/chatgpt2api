@@ -649,7 +649,7 @@ function addProvider() {
   localConfig.value.mail.providers.push({
     enable: true,
     type: 'ddg_mail',
-    api_base: 'https://your-temp-email-api.example.com',
+    api_base: '',
     admin_email: '',
     admin_password: '',
     ddg_token: '',
