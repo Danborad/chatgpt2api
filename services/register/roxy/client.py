@@ -85,9 +85,11 @@ def _proxy_url_to_roxy_info(proxy_url: str) -> dict:
         info["proxyUserName"] = unquote(parsed.username)
     if parsed.password:
         info["proxyPassword"] = unquote(parsed.password)
-    check_channel = str(getattr(_cfg, "ROXY_PROXY_CHECK_CHANNEL", "") or "").strip()
-    if check_channel:
-        info["checkChannel"] = check_channel
+    ignore_check = bool(getattr(_cfg, "ROXY_IGNORE_PROXY_CHECK", True))
+    if not ignore_check:
+        check_channel = str(getattr(_cfg, "ROXY_PROXY_CHECK_CHANNEL", "") or "").strip()
+        if check_channel:
+            info["checkChannel"] = check_channel
     return info
 
 
@@ -398,7 +400,7 @@ class RoxyBrowserClient:
             logger.warning("[Roxy] 自动查询工作区列表失败: %s", exc)
         return wid, pid
 
-    def create_profile(self, payload: dict | None = None) -> str:
+    def create_profile(self, payload: dict | None = None, proxy: str = "") -> str:
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
         random_name_enabled = bool(getattr(_cfg, "ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True))
         if random_name_enabled:
@@ -424,31 +426,38 @@ class RoxyBrowserClient:
             body.setdefault("workspaceId", workspace_id)
         if project_id:
             body.setdefault("projectId", project_id)
-        if bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)) and not body.get("proxyInfo"):
-            from services.register.roxy import config as _roxy_cfg
 
-            proxy_url = _roxy_cfg.pick_proxy()
-            if proxy_url:
-                proxy_info = _proxy_url_to_roxy_info(proxy_url)
-                body["proxyInfo"] = proxy_info
-                logger.info(
-                    "[Roxy] 创建环境启用代理池：proxy=%s type=%s host=%s port=%s",
-                    _mask_proxy(proxy_url),
-                    proxy_info.get("protocol") or proxy_info.get("proxyCategory"),
-                    proxy_info.get("host"),
-                    proxy_info.get("port"),
-                )
-            else:
+        # 代理设置：优先使用传入的 proxy（如来自全局注册网络代理），其次检查代理池
+        if not body.get("proxyInfo"):
+            chosen_proxy = str(proxy or getattr(_cfg, "PROXY", "") or "").strip()
+            if not chosen_proxy and bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)):
+                from services.register.roxy import config as _roxy_cfg
+                chosen_proxy = _roxy_cfg.pick_proxy()
+            if chosen_proxy:
+                try:
+                    proxy_info = _proxy_url_to_roxy_info(chosen_proxy)
+                    body["proxyInfo"] = proxy_info
+                    logger.info(
+                        "[Roxy] 创建环境启用代理：proxy=%s type=%s host=%s port=%s",
+                        _mask_proxy(chosen_proxy),
+                        proxy_info.get("protocol") or proxy_info.get("proxyCategory"),
+                        proxy_info.get("host"),
+                        proxy_info.get("port"),
+                    )
+                except Exception as exc:
+                    logger.warning("[Roxy] 解析代理失败，本次创建环境不设置代理: proxy=%s error=%s", _mask_proxy(chosen_proxy), exc)
+            elif bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)):
                 logger.warning("[Roxy] 已启用 ROXY_CREATE_USE_PROXY_POOL，但 PROXY_POOL 为空，本次创建环境不设置代理")
+
         if payload:
             body.update(payload)
         if not body.get("workspaceId"):
             raise RuntimeError(
-                "Roxy 创建环境需要 workspaceId。请在 config/roxybrowser.py 或 WebUI 的 RoxyBrowser 配置中填写 ROXY_WORKSPACE_ID，"
-                "或直接在 ROXY_PROFILE_CREATE_PAYLOAD 里加入 {'workspaceId': '你的工作区ID'}。"
+                "Roxy 创建环境需要 workspaceId。请在 Web 控制台的“Roxy 指纹浏览器连接配置”中填写您的团队/工作区 ID，"
+                "或在 config/roxybrowser.py 中填写 ROXY_WORKSPACE_ID。"
             )
         logger.info(
-            "[Roxy] 创建环境参数：workspaceId=%s projectId=%s name=%s random_name=%s os=%s osVersion=%s random_os=%s",
+            "[Roxy] 创建环境参数：workspaceId=%s projectId=%s name=%s random_name=%s os=%s osVersion=%s random_os=%s proxy=%s",
             body.get("workspaceId"),
             body.get("projectId") or "-",
             body.get("name") or "-",
@@ -456,8 +465,18 @@ class RoxyBrowserClient:
             body.get("os") or "-",
             body.get("osVersion") or "-",
             random_os_enabled,
+            bool(body.get("proxyInfo")),
         )
-        result = self.request(_cfg.ROXY_CREATE_METHOD, _cfg.ROXY_CREATE_PATH, json_body=body)
+        try:
+            result = self.request(_cfg.ROXY_CREATE_METHOD, _cfg.ROXY_CREATE_PATH, json_body=body)
+        except Exception as exc:
+            err_msg = str(exc)
+            if "用户没有该团队权限" in err_msg or "没有该团队权限" in err_msg:
+                raise RuntimeError(
+                    f"Roxy API 返回失败 POST /browser/create: 用户没有该团队权限！(当前使用的 workspaceId='{body.get('workspaceId')}')。"
+                    "由于自动查询到的团队不具备创建环境权限，请在 Web 控制台的“Roxy 团队 / 工作区 ID”中直接手动填写您拥有创建权限的团队 ID。"
+                ) from exc
+            raise
         profile_id = _first(result, [
             ("id",), ("dirId",), ("dir_id",), ("profile_id",), ("profileId",), ("browser_id",),
             ("data", "id"), ("data", "dirId"), ("data", "dir_id"),
@@ -475,7 +494,7 @@ class RoxyBrowserClient:
             return ""
         return text
 
-    def open_profile(self, profile_id: str | None = None) -> RoxyOpenResult:
+    def open_profile(self, profile_id: str | None = None, proxy: str = "") -> RoxyOpenResult:
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
         configured_pid = self._normalize_profile_id(profile_id if profile_id is not None else getattr(_cfg, "ROXY_PROFILE_ID", ""))
         if one_profile and configured_pid:
@@ -487,7 +506,7 @@ class RoxyBrowserClient:
         pid = configured_pid
         created_by_run = False
         if not pid:
-            pid = self.create_profile()
+            pid = self.create_profile(proxy=proxy)
             created_by_run = True
             logger.info("[Roxy] 已创建临时环境：%s", pid)
 

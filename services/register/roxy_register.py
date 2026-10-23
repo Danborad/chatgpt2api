@@ -72,6 +72,7 @@ def _apply_roxy_config() -> None:
         "create_use_proxy_pool": "ROXY_CREATE_USE_PROXY_POOL",
         "activate_account": "ROXY_ACTIVATE_ACCOUNT",
         "otp_wait_seconds": "ROXY_OTP_WAIT_SECONDS",
+        "ignore_proxy_check": "ROXY_IGNORE_PROXY_CHECK",
     }
     for key, attr in mapping.items():
         if key in overrides and overrides[key] is not None:
@@ -83,6 +84,7 @@ def _apply_roxy_config() -> None:
                 "keep_browser_open",
                 "create_use_proxy_pool",
                 "activate_account",
+                "ignore_proxy_check",
             ):
                 val = bool(val)
             elif key == "otp_wait_seconds":

@@ -66,6 +66,7 @@ export interface RoxyConfig {
   proxy_pool: string
   activate_account: boolean
   otp_wait_seconds: number
+  ignore_proxy_check?: boolean
 }
 
 export interface RegisterConfig {
@@ -106,6 +107,10 @@ export async function stopRoxyRegister(): Promise<{ register: RegisterConfig }> 
 
 export async function resetRoxyRegister(): Promise<{ register: RegisterConfig }> {
   return apiClient.post('/api/register/roxy/reset')
+}
+
+export async function fetchRoxyWorkspaces(): Promise<{ ok: boolean; items: Array<{ id: string; name: string; projectId?: string; projectName?: string; label?: string }> }> {
+  return apiClient.get('/api/register/roxy/workspaces')
 }
 
 export async function fetchSharedRegisterConfig(): Promise<{ register: RegisterConfig }> {

@@ -139,7 +139,7 @@
       <div v-show="activeTab === 'config'" class="space-y-5">
         <!-- 1. Roxy 指纹浏览器客户端连接配置 -->
         <FormSection title="Roxy 指纹浏览器连接配置 (本机客户端)" density="roomy">
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label class="block text-xs">
               <span class="ui-field-label">Roxy 本机 API 地址</span>
               <Input
@@ -151,7 +151,7 @@
               />
             </label>
 
-            <label class="block text-xs sm:col-span-1 lg:col-span-2">
+            <label class="block text-xs sm:col-span-1 lg:col-span-3">
               <div class="flex items-center justify-between">
                 <span class="ui-field-label">Roxy API 密钥 (Token)</span>
                 <button
@@ -173,9 +173,31 @@
                 />
               </div>
             </label>
+
+            <label class="block text-xs sm:col-span-1 lg:col-span-2">
+              <span class="ui-field-label">Roxy 团队 / 工作区 ID (workspaceId)</span>
+              <Input
+                v-model="localConfig.roxy.workspace_id"
+                block
+                root-class="font-mono"
+                placeholder="留空自动识别；若报错“没有该团队权限”请在此填入团队ID"
+                :disabled="registerConfig?.enabled"
+              />
+            </label>
+
+            <label class="block text-xs sm:col-span-1 lg:col-span-2">
+              <span class="ui-field-label">Roxy 项目 ID (projectId，可选)</span>
+              <Input
+                v-model="localConfig.roxy.project_id"
+                block
+                root-class="font-mono"
+                placeholder="可选，留空使用默认或自动识别"
+                :disabled="registerConfig?.enabled"
+              />
+            </label>
           </div>
 
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 items-center">
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 items-center">
             <label class="flex items-center gap-2 text-xs cursor-pointer">
               <input
                 type="checkbox"
@@ -196,6 +218,16 @@
               <span>注册成功后自动发送首条消息激活</span>
             </label>
 
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                v-model="localConfig.roxy.ignore_proxy_check"
+                class="rounded border-border"
+                :disabled="registerConfig?.enabled"
+              />
+              <span>忽略代理通道预检 (不强制检测代理)</span>
+            </label>
+
             <label class="block text-xs">
               <span class="ui-field-label">验证码单次等待超时 (秒)</span>
               <Input
@@ -211,7 +243,7 @@
           </div>
 
           <p class="mt-2 text-[11px] text-muted-foreground">
-            提示：只需填写 API 密钥，工作区与项目 ID 会由系统自动识别获取；浏览器代理请直接在 Roxy 客户端内部配置，无需在此重复设置。
+            提示：若 Roxy 提示“用户没有该团队权限”，请在上方填入拥有环境创建权限的团队 ID；填入下方“全局注册网络代理”将自动注入 Roxy 窗口与注册网络中。
           </p>
         </FormSection>
 
@@ -562,6 +594,7 @@ const localConfig = ref<RegisterConfig>({
     proxy_pool: '',
     activate_account: true,
     otp_wait_seconds: 60,
+    ignore_proxy_check: true,
   },
 })
 
@@ -683,6 +716,7 @@ function syncFormFromConfig(cfg: RegisterConfig) {
       proxy_pool: '',
       activate_account: true,
       otp_wait_seconds: 60,
+      ignore_proxy_check: true,
     }
   }
   otpWaitSecondsInput.value = String(localConfig.value.roxy?.otp_wait_seconds || 60)
@@ -713,6 +747,7 @@ async function handleStart() {
       proxy_pool: '',
       activate_account: localConfig.value.roxy?.activate_account !== false,
       otp_wait_seconds: Math.max(10, Number(otpWaitSecondsInput.value) || 60),
+      ignore_proxy_check: localConfig.value.roxy?.ignore_proxy_check !== false,
     }
     const payload: Partial<RegisterConfig> = {
       mode: localConfig.value.mode,
@@ -772,6 +807,7 @@ async function handleSaveConfig() {
       proxy_pool: '',
       activate_account: localConfig.value.roxy?.activate_account !== false,
       otp_wait_seconds: Math.max(10, Number(otpWaitSecondsInput.value) || 60),
+      ignore_proxy_check: localConfig.value.roxy?.ignore_proxy_check !== false,
     }
     const payload: Partial<RegisterConfig> = {
       mode: localConfig.value.mode,

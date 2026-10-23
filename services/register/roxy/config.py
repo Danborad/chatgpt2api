@@ -136,7 +136,9 @@ ROXY_DEFAULT_OS_VERSION: str = ""
 ROXY_CREATE_USE_PROXY_POOL: bool = env_str("ROXY_CREATE_USE_PROXY_POOL", "false").lower() in ("1", "true", "yes", "on")
 
 # Roxy 代理检测通道；留空则不传 checkChannel。
-ROXY_PROXY_CHECK_CHANNEL: str = "IPRust.io"
+ROXY_PROXY_CHECK_CHANNEL: str = env_str("ROXY_PROXY_CHECK_CHANNEL", "")
+# 是否忽略 Roxy 代理通道检测；开启后创建窗口不带 checkChannel，避免因检测失败无法启动。
+ROXY_IGNORE_PROXY_CHECK: bool = env_str("ROXY_IGNORE_PROXY_CHECK", "true").lower() in ("1", "true", "yes", "on")
 
 # 没有 ROXY_PROFILE_ID 时创建环境的最小 payload；按你的 Roxy 版本字段调整。
 # 默认开启 ROXY_RANDOM_PROFILE_NAME_ON_CREATE，因此这里的 name 只是兜底值。
@@ -171,6 +173,7 @@ def get_roxy_config_dict() -> dict:
         "proxy_pool": "\n".join(ROXY_PROXY_POOL) if ROXY_PROXY_POOL else "",
         "activate_account": bool(ROXY_ACTIVATE_ACCOUNT),
         "otp_wait_seconds": int(ROXY_OTP_WAIT_SECONDS or 60),
+        "ignore_proxy_check": bool(ROXY_IGNORE_PROXY_CHECK),
     }
 
 

@@ -698,11 +698,12 @@ class PlatformRegistrar:
                 allow_redirects=True,
                 verify=False,
             )
-        if resp is None or resp.status_code != 200:
-            raise RuntimeError(error or f"chatgpt_boot_http_{getattr(resp, 'status_code', 'unknown')}")
-        cookies = self.session.cookies.get_dict()
-        self.device_id = str(cookies.get("oai-did") or self.device_id)
-        step(index, "ChatGPT 会话初始化完成")
+        if resp is not None and resp.status_code == 200:
+            cookies = self.session.cookies.get_dict()
+            self.device_id = str(cookies.get("oai-did") or self.device_id)
+            step(index, "ChatGPT 会话初始化完成")
+        else:
+            step(index, f"ChatGPT 首页预检未返回 200 (status={getattr(resp, 'status_code', 'unknown')})，已自动跳过并继续注册流程", "yellow")
 
     def _chatgpt_authorize(self, email: str, index: int, *, include_login_hint: bool = False) -> None:
         self._boot_chatgpt_session(index)

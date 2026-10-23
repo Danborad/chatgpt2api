@@ -2411,7 +2411,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
     """
     _set_stop_event(stop_event)
     client = RoxyBrowserClient()
-    opened = client.open_profile()
+    opened = client.open_profile(proxy=proxy)
     driver = None
     create_acknowledged = False
     openai_password: str | None = None

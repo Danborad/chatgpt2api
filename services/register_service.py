@@ -145,6 +145,7 @@ def _default_roxy_config() -> dict:
             "proxy_pool": "",
             "activate_account": True,
             "otp_wait_seconds": 60,
+            "ignore_proxy_check": True,
         }
 
 

@@ -229,6 +229,13 @@ def create_router() -> APIRouter:
         roxy_register_service.reset()
         return {"register": roxy_register_snapshot()}
 
+    @router.get("/api/register/roxy/workspaces")
+    async def get_roxy_workspaces(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        from services.register.roxy.client import RoxyBrowserClient
+        client = RoxyBrowserClient()
+        return await run_in_threadpool(client.list_workspaces)
+
     @router.get("/api/register/roxy/events")
     async def roxy_register_events(token: str = ""):
         require_admin(f"Bearer {token}")
