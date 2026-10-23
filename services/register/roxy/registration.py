@@ -51,13 +51,38 @@ def _log_prefix(driver=None) -> str:
     return "[Roxy注册]"
 
 
+def _wait_for_cdp_ready(debugger_address: str, timeout: float = 15.0) -> bool:
+    """等待 Chrome CDP 调试端口真正开启并响应 /json/version。"""
+    import urllib.request
+    deadline = time.time() + timeout
+    url = f"http://{debugger_address}/json/version"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.4)
+    return False
+
+
 def _build_driver(opened: RoxyOpenResult):
+    import os
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
 
     if opened.debugger_address:
+        logger.info("[Roxy] 等待 Chrome 调试端口就绪: %s...", opened.debugger_address)
+        is_ready = _wait_for_cdp_ready(opened.debugger_address, timeout=15)
+        if not is_ready:
+            logger.warning(
+                "[Roxy] Chrome 调试端口 %s 在 15 秒内未响应。可能原因：1. 开启了“无头静默运行”导致启动闪退（建议在配置中关闭无头模式）；"
+                "2. 代理设置不可达导致卡死；3. 跨机器远程连接时防火墙阻断了调试端口。",
+                opened.debugger_address
+            )
+
         logger.info("[Roxy] Selenium 连接 debuggerAddress=%s", opened.debugger_address)
         options = Options()
         # 页面里长轮询/风控脚本偶尔会让 driver.get 等到超时；eager 只等 DOMContentLoaded。
@@ -70,13 +95,27 @@ def _build_driver(opened: RoxyOpenResult):
                 driver_path = str(raw_data.get("driver") or raw_data.get("driverPath") or raw_data.get("driver_path") or "").strip()
         except Exception:
             driver_path = ""
-        if driver_path:
-            logger.info("[Roxy] 使用 Roxy chromedriver=%s", driver_path)
-            driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
-        else:
-            driver = webdriver.Chrome(options=options)
-        _apply_browser_automation_mask(driver)
-        return driver
+
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                if driver_path and os.path.exists(driver_path) and os.access(driver_path, os.X_OK):
+                    logger.info("[Roxy] 使用 Roxy 本地 chromedriver=%s (尝试 %s/3)", driver_path, attempt)
+                    driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
+                elif opened.webdriver_url:
+                    logger.info("[Roxy] 使用远程 WebDriver=%s (尝试 %s/3)", opened.webdriver_url, attempt)
+                    driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
+                else:
+                    logger.info("[Roxy] 使用系统默认 chromedriver (尝试 %s/3)", attempt)
+                    driver = webdriver.Chrome(options=options)
+                _apply_browser_automation_mask(driver)
+                return driver
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("[Roxy] 第 %s 次连接 Selenium 失败: %s", attempt, exc)
+                time.sleep(1.0)
+        if last_exc:
+            raise last_exc
 
     if opened.webdriver_url:
         logger.info("[Roxy] Selenium 连接 webdriver_url=%s", opened.webdriver_url)

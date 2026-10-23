@@ -516,7 +516,22 @@ class RoxyBrowserClient:
         wid, _ = self.ensure_workspace()
         params.setdefault("workspaceId", wid)
         params.setdefault("dirId", int(pid) if str(pid).isdigit() else pid)
-        params.setdefault("args", [])
+        # 官方推荐 args 参数：
+        # --remote-allow-origins=* 解决 Chrome 111+ 安全拦截与 debuggerAddress 拒绝连接
+        # --disable-audio-output 禁用音频输出
+        # --remote-debugging-address=0.0.0.0 允许跨机器远程连接调试端口
+        args = list(params.get("args") or [])
+        default_args = [
+            "--remote-allow-origins=*",
+            "--disable-audio-output",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--remote-debugging-address=0.0.0.0",
+        ]
+        for a in default_args:
+            if a not in args:
+                args.append(a)
+        params["args"] = args
         params.setdefault("forceOpen", True)
         # ROXY_OPEN_HEADLESS 是显式开关，优先级应高于 ROXY_OPEN_EXTRA_PARAMS，
         # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
@@ -529,6 +544,11 @@ class RoxyBrowserClient:
             json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
         )
         debugger_address = self._extract_debugger_address(result)
+        # 如果 ROXY_API_BASE 配置的是远程 IP，自动将 debugger_address 中的 127.0.0.1 替换为远程宿主机 IP
+        api_base_host = (urlparse(str(getattr(_cfg, "ROXY_API_BASE", "") or "")).hostname or "").strip()
+        if api_base_host and api_base_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            if debugger_address and ("127.0.0.1:" in debugger_address or "localhost:" in debugger_address):
+                debugger_address = debugger_address.replace("127.0.0.1", api_base_host).replace("localhost", api_base_host)
         logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
         webdriver_url = _first(result, [
             ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
