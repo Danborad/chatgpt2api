@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
+from services.cluster_service import cluster_service
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import (
     EditableFileTaskCleanupError,
@@ -83,12 +84,11 @@ TRACE_REQUEST_HEADERS = {
     "x-oneapi-request-id": "x_oneapi_request_id",
     "x-channel-id": "x_channel_id",
     "x-channel-name": "x_channel_name",
+    "x-chatgpt2api-cluster-hop": "x_cluster_hop",
 }
 
 
 def attach_trace_headers(call: LoggedCall, request: Request) -> None:
-    if not call._trace_image_perf():
-        return
     headers: dict[str, str] = {}
     for header, field in TRACE_REQUEST_HEADERS.items():
         value = str(request.headers.get(header) or "").strip()
@@ -143,6 +143,16 @@ def create_router() -> APIRouter:
         attach_trace_headers(call, request)
         call.attach_trace_metadata(payload)
         await filter_or_log(call, body.prompt)
+        if cluster_service.is_cluster_active():
+            forward_res = await cluster_service.dispatch_request(
+                path="/v1/images/generations",
+                payload=payload,
+                stream=False,
+                call=call,
+                local_handler=lambda: call.run(openai_v1_image_generations.handle, payload),
+            )
+            if forward_res is not None:
+                return forward_res
         return await call.run(openai_v1_image_generations.handle, payload)
 
     @router.post("/v1/images/edits")
@@ -162,6 +172,16 @@ def create_router() -> APIRouter:
         if mask_sources:
             payload["mask"] = await read_image_sources(mask_sources)
         payload["base_url"] = resolve_image_base_url(request)
+        if cluster_service.is_cluster_active():
+            forward_res = await cluster_service.dispatch_request(
+                path="/v1/images/edits",
+                payload=payload,
+                stream=False,
+                call=call,
+                local_handler=lambda: call.run(openai_v1_image_edit.handle, payload),
+            )
+            if forward_res is not None:
+                return forward_res
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
@@ -184,6 +204,16 @@ def create_router() -> APIRouter:
         attach_trace_headers(call, request)
         call.attach_trace_metadata(payload)
         await filter_or_log(call, request_preview)
+        if cluster_service.is_cluster_active():
+            forward_res = await cluster_service.dispatch_request(
+                path="/v1/chat/completions",
+                payload=payload,
+                stream=bool(payload.get("stream")),
+                call=call,
+                local_handler=lambda: call.run(openai_v1_chat_complete.handle, payload),
+            )
+            if forward_res is not None:
+                return forward_res
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
@@ -204,6 +234,16 @@ def create_router() -> APIRouter:
         )
         call.attach_trace_metadata(payload)
         await filter_or_log(call, request_preview)
+        if cluster_service.is_cluster_active():
+            forward_res = await cluster_service.dispatch_request(
+                path="/v1/responses",
+                payload=payload,
+                stream=bool(payload.get("stream")),
+                call=call,
+                local_handler=lambda: call.run(openai_v1_response.handle, payload),
+            )
+            if forward_res is not None:
+                return forward_res
         return await call.run(openai_v1_response.handle, payload)
 
     @router.post("/v1/messages")
@@ -219,6 +259,16 @@ def create_router() -> APIRouter:
         request_preview = request_text(payload.get("system"), payload.get("messages"), payload.get("tools"))
         call = LoggedCall(identity, "/v1/messages", model, "Messages", request_text=request_preview)
         await filter_or_log(call, request_preview)
+        if cluster_service.is_cluster_active():
+            forward_res = await cluster_service.dispatch_request(
+                path="/v1/messages",
+                payload=payload,
+                stream=bool(payload.get("stream")),
+                call=call,
+                local_handler=lambda: call.run(anthropic_v1_messages.handle, payload, sse="anthropic"),
+            )
+            if forward_res is not None:
+                return forward_res
         return await call.run(anthropic_v1_messages.handle, payload, sse="anthropic")
 
     @router.post("/v1/search")
