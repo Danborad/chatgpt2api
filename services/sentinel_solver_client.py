@@ -77,3 +77,36 @@ def solve_turnstile(dx: str, p: str) -> str:
         except Exception as exc:
             logger.warning({"event": "sentinel_solver_error", "error": str(exc)})
     return solve_turnstile_token(dx, p) or ""
+
+
+def headless_login(
+    email: str,
+    password: str,
+    two_factor_secret: str = "",
+    proxy: str = "",
+    timeout_secs: float = 120.0,
+) -> dict:
+    """调用 sentinel_solver 服务的无头浏览器自动执行登录与 2FA 认证换取完整凭据。"""
+    base_url = config.sentinel_solver_url
+    if not base_url:
+        raise RuntimeError("sentinel_solver 服务未配置，无法执行无头浏览器登录")
+    try:
+        response = requests.post(
+            f"{base_url}/v1/headless-login",
+            headers=_solver_headers(),
+            json={
+                "email": email,
+                "password": password,
+                "two_factor_secret": two_factor_secret,
+                "proxy": proxy,
+            },
+            timeout=timeout_secs,
+        )
+        if response.status_code == 200:
+            data = response.json() or {}
+            if data.get("ok"):
+                return data.get("account") or {}
+            raise RuntimeError(data.get("error") or "无头浏览器登录失败")
+        raise RuntimeError(f"sentinel_solver 返回 HTTP {response.status_code}: {response.text[:200]}")
+    except Exception as exc:
+        raise RuntimeError(f"调用无头登录服务失败: {exc}") from exc

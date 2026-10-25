@@ -15,11 +15,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from datetime import datetime, timezone
+import hashlib
 import hmac
+import json
 import os
-import time
-from contextlib import asynccontextmanager
 from pathlib import Path
+import secrets
+import struct
+import time
+from typing import Any
+import urllib.request
+from urllib.parse import parse_qs, urlencode, urlparse
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
@@ -217,6 +226,301 @@ async def solve_turnstile(body: TurnstileRequest, authorization: str | None = He
     return {"token": str(token or "")}
 
 
+def compute_totp(secret: str) -> str:
+    clean = secret.replace(" ", "").strip().upper()
+    missing_padding = len(clean) % 8
+    if missing_padding:
+        clean += "=" * (8 - missing_padding)
+    key = base64.b32decode(clean)
+    counter = int(time.time() // 30)
+    counter_bytes = struct.pack(">Q", counter)
+    mac = hmac.new(key, counter_bytes, hashlib.sha1).digest()
+    offset = mac[-1] & 0x0F
+    code_int = struct.unpack(">I", mac[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{code_int % 1000000:06d}"
+
+
+async def perform_headless_login(
+    browser: Browser,
+    email: str,
+    password: str,
+    two_factor_secret: str = "",
+    proxy: str = "",
+) -> dict[str, Any]:
+    proxy_server = proxy.strip() or PROXY
+    context_kwargs: dict[str, Any] = {
+        "locale": "zh-CN",
+        "viewport": {"width": 1280, "height": 800},
+        "user_agent": solver.user_agent
+        or (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+    }
+    if proxy_server:
+        context_kwargs["proxy"] = {"server": proxy_server}
+
+    context = await browser.new_context(**context_kwargs)
+    await Stealth().apply_stealth_async(context)
+    page = await context.new_page()
+
+    try:
+        try:
+            await page.goto("https://chatgpt.com/auth/login", wait_until="domcontentloaded", timeout=40000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(2000)
+
+        email_input_sel = (
+            'input[type="email"], input[name="username"], input[name="email"], '
+            'input[autocomplete="email"], input#email-input'
+        )
+        try:
+            await page.wait_for_selector(email_input_sel, state="visible", timeout=25000)
+        except Exception:
+            title = await page.title()
+            if any(m in title for m in CHALLENGE_TITLES):
+                raise RuntimeError("登录页被 Cloudflare 质询拦截，请检查代理节点是否干净")
+            raise RuntimeError(f"未找到邮箱输入框，当前页面: {page.url} (title={title})")
+
+        await page.fill(email_input_sel, email)
+        await page.wait_for_timeout(400)
+
+        # 提交邮箱，过滤 Google/Apple/手机等第三方入口
+        await page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+            const submitBtn = btns.find(b => {
+                const t = (b.innerText || b.value || '').trim();
+                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github'];
+                if (bad.some(x => t.toLowerCase().includes(x))) return false;
+                return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
+            });
+            if (submitBtn) submitBtn.click();
+        }""")
+
+        # 等待密码输入框出现或错误提示
+        password_input_sel = 'input[type="password"], input[name="password"], input[name="current-password"]'
+        start_t = time.time()
+        while time.time() - start_t < 25:
+            try:
+                if await page.locator(password_input_sel).count() > 0 and await page.locator(password_input_sel).first.is_visible():
+                    break
+                err_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[role="alert"], .error, .text-danger, [data-testid="error"]');
+                    return el ? el.innerText.trim() : '';
+                }""")
+                if err_text:
+                    raise RuntimeError(f"提交邮箱后提示错误: {err_text}")
+            except Exception as e:
+                if "提交邮箱后提示错误" in str(e):
+                    raise
+            await page.wait_for_timeout(800)
+
+        await page.fill(password_input_sel, password)
+        await page.wait_for_timeout(400)
+
+        # 提交密码
+        await page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+            const submitBtn = btns.find(b => {
+                const t = (b.innerText || b.value || '').trim();
+                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github'];
+                if (bad.some(x => t.toLowerCase().includes(x))) return false;
+                return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
+            });
+            if (submitBtn) submitBtn.click();
+        }""")
+
+        # 等待 2FA 界面或直接进入 ChatGPT
+        otp_sel = (
+            'input[name="code"], input[placeholder*="验证码"], '
+            'input[placeholder*="code" i], input[autocomplete="one-time-code"], input[maxlength="6"]'
+        )
+        start_t = time.time()
+        mfa_needed = False
+        while time.time() - start_t < 25:
+            try:
+                if "chatgpt.com" in page.url and "/auth" not in page.url and "mfa" not in page.url and "login" not in page.url:
+                    break
+                if "mfa" in page.url or "challenge" in page.url:
+                    mfa_needed = True
+                    break
+                if await page.locator(otp_sel).count() > 0 and await page.locator(otp_sel).first.is_visible():
+                    mfa_needed = True
+                    break
+                err_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[role="alert"], .error, #error-element-password, [data-testid="error"]');
+                    return el ? el.innerText.trim() : '';
+                }""")
+                if err_text:
+                    raise RuntimeError(f"提交密码后提示错误: {err_text}")
+            except Exception as e:
+                if "提交密码后提示错误" in str(e):
+                    raise
+            await page.wait_for_timeout(800)
+
+        # 若需要 2FA 验证
+        if mfa_needed:
+            if not two_factor_secret:
+                raise RuntimeError("该账号已开启 2FA 双重认证，但未提供 2FA 密钥")
+            totp = compute_totp(two_factor_secret)
+            await page.fill(otp_sel, totp)
+            await page.wait_for_timeout(400)
+            await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                const submitBtn = btns.find(b => {
+                    const t = (b.innerText || b.value || '').trim();
+                    return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
+                });
+                if (submitBtn) submitBtn.click();
+            }""")
+
+        # 等待重定向至 chatgpt.com
+        start_t = time.time()
+        logged_in = False
+        while time.time() - start_t < 30:
+            if "chatgpt.com" in page.url and "/auth" not in page.url and "mfa" not in page.url:
+                logged_in = True
+                break
+            try:
+                err_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[role="alert"], .error, #error-element-code, [data-testid="error"]');
+                    return el ? el.innerText.trim() : '';
+                }""")
+                if err_text:
+                    raise RuntimeError(f"2FA 验证码提交失败: {err_text}")
+            except Exception as e:
+                if "2FA 验证码提交失败" in str(e):
+                    raise
+            await page.wait_for_timeout(1000)
+
+        if not logged_in:
+            raise RuntimeError(f"未能跳转至 chatgpt.com 主界面，最后停留在: {page.url}")
+
+        await page.wait_for_timeout(1500)
+        # 关闭可能出现的弹窗
+        try:
+            await page.evaluate("""() => {
+                const closeBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+                    const t = b.innerText.trim();
+                    return ['继续', '确定', 'Next', 'Done', 'Got it', '开始使用', 'Stay logged out'].includes(t);
+                });
+                for (const b of closeBtns) b.click();
+            }""")
+        except Exception:
+            pass
+
+        # 提取 Web Session
+        session_info = await page.evaluate("""async () => {
+            try {
+                const res = await fetch('https://chatgpt.com/api/auth/session', { credentials: 'include' });
+                return await res.json();
+            } catch (e) {
+                return { error: String(e) };
+            }
+        }""")
+        web_access_token = str(session_info.get("accessToken") or "").strip()
+        session_token = str(session_info.get("sessionToken") or session_info.get("session_token") or "").strip()
+
+        cookies = await context.cookies()
+        cookie_header = "; ".join([f"{c['name']}={c['value']}" for c in cookies if "chatgpt" in c.get("domain", "")])
+
+        # 换取 Platform OAuth Refresh Token
+        oauth_tokens = {}
+        try:
+            verifier = secrets.token_urlsafe(32)
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+            oauth_params = {
+                "issuer": "https://auth.openai.com",
+                "client_id": "app_2SKx67EdpoN0G6j64rFvigXD",
+                "audience": "https://api.openai.com/v1",
+                "redirect_uri": "https://platform.openai.com/auth/callback",
+                "device_id": str(secrets.token_hex(16)),
+                "screen_hint": "login_or_signup",
+                "scope": "openid profile email offline_access",
+                "response_type": "code",
+                "response_mode": "query",
+                "state": "state_" + secrets.token_hex(8),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "login_hint": email,
+            }
+            oauth_url = f"https://auth.openai.com/api/accounts/authorize?{urlencode(oauth_params)}"
+            await page.goto(oauth_url, timeout=25000)
+
+            callback_url = ""
+            start_t = time.time()
+            while time.time() - start_t < 15:
+                if "platform.openai.com/auth/callback" in page.url and "code=" in page.url:
+                    callback_url = page.url
+                    break
+                try:
+                    btn = page.locator('button:has-text("Authorize"), button:has-text("授权"), button:has-text("Continue"), button:has-text("继续")')
+                    if await btn.count() > 0 and await btn.first.is_visible():
+                        await btn.first.click()
+                except Exception:
+                    pass
+                await page.wait_for_timeout(800)
+
+            if callback_url:
+                code = parse_qs(urlparse(callback_url).query).get("code", [""])[0]
+                if code:
+                    token_req = urllib.request.Request(
+                        "https://auth.openai.com/api/accounts/oauth/token",
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": context_kwargs["user_agent"],
+                            "Referer": "https://platform.openai.com/",
+                            "Origin": "https://platform.openai.com",
+                        },
+                        data=json.dumps({
+                            "client_id": "app_2SKx67EdpoN0G6j64rFvigXD",
+                            "code_verifier": verifier,
+                            "grant_type": "authorization_code",
+                            "code": code,
+                            "redirect_uri": "https://platform.openai.com/auth/callback",
+                        }).encode(),
+                    )
+                    handlers = []
+                    if proxy_server:
+                        handlers.append(urllib.request.ProxyHandler({"https": proxy_server, "http": proxy_server}))
+                    opener = urllib.request.build_opener(*handlers)
+                    with opener.open(token_req, timeout=30) as resp:
+                        oauth_tokens = json.loads(resp.read().decode())
+        except Exception:
+            pass
+
+        final_access_token = web_access_token or (oauth_tokens.get("access_token") if oauth_tokens else "")
+        if not final_access_token:
+            raise RuntimeError("未能获取到有效的 Access Token")
+
+        return {
+            "email": email,
+            "password": password,
+            "two_factor_secret": two_factor_secret,
+            "access_token": final_access_token,
+            "refresh_token": (oauth_tokens.get("refresh_token") if oauth_tokens else "") or "",
+            "id_token": (oauth_tokens.get("id_token") if oauth_tokens else "") or "",
+            "session_token": session_token,
+            "cookie": cookie_header,
+            "source_type": "web",
+            "registration_engine": "headless_2fa",
+            "user_id": str((session_info.get("user") or {}).get("id") or ""),
+            "plan_type": str((session_info.get("account") or {}).get("planType") or ""),
+            "expires_at": str(session_info.get("expires") or ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        await context.close()
+
+
+class HeadlessLoginRequest(BaseModel):
+    email: str
+    password: str
+    two_factor_secret: str = ""
+    proxy: str = ""
+
+
 @app.post("/v1/so")
 async def solve_so(body: SORequest, authorization: str | None = Header(default=None)) -> dict[str, str]:
     require_key(authorization)
@@ -227,6 +531,28 @@ async def solve_so(body: SORequest, authorization: str | None = Header(default=N
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"so solve failed: {exc}") from exc
     return {"token": str(token or "")}
+
+
+@app.post("/v1/headless-login")
+async def headless_login_endpoint(body: HeadlessLoginRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_key(authorization)
+    browser = solver._browser
+    if browser is None or not browser.is_connected():
+        await solver.start()
+        browser = solver._browser
+    if browser is None:
+        return {"ok": False, "error": "Playwright browser 启动失败"}
+    try:
+        account = await perform_headless_login(
+            browser,
+            email=body.email.strip(),
+            password=body.password.strip(),
+            two_factor_secret=body.two_factor_secret.strip(),
+            proxy=body.proxy.strip(),
+        )
+        return {"ok": True, "account": account}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 if __name__ == "__main__":

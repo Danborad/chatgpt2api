@@ -314,6 +314,7 @@ export function useAccountsPage() {
   const importManualTokenText = accountImport.importManualTokenText
   const importTokenTextFile = accountImport.importTokenTextFile
   const importSessionJson = accountImport.importSessionJson
+  const importPassword2faAccounts = accountImport.importPassword2faAccounts
   const startOAuthLogin = accountImport.startOAuthLogin
   const openOAuthAuthorizeUrl = accountImport.openOAuthAuthorizeUrl
   const copyOAuthAuthorizeUrl = accountImport.copyOAuthAuthorizeUrl
@@ -428,6 +429,8 @@ export function useAccountsPage() {
     oauthRedirectUriPrefix,
     manualTokenText,
     sessionJsonText,
+    password2faText: accountImport.password2faText,
+    password2faProxy: accountImport.password2faProxy,
     accountGroups,
     proxyGroups,
     accountGroupsLoading,
@@ -489,6 +492,7 @@ export function useAccountsPage() {
     importManualTokenText,
     importTokenTextFile,
     importSessionJson,
+    importPassword2faAccounts,
     startOAuthLogin,
     openOAuthAuthorizeUrl,
     copyOAuthAuthorizeUrl,

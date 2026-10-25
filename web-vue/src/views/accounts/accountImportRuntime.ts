@@ -18,6 +18,7 @@ export {
 } from './remoteAccountImportTrackingRuntime'
 
 export const ACCOUNT_IMPORT_MODE_CATALOG = [
+  { label: '卡密/2FA 自动登录', value: 'password_2fa' },
   { label: 'OAuth 登录已有账号', value: 'oauth_login' },
   { label: '导入完整备份文件', value: 'backup_json' },
   { label: '导入 Access Token', value: 'access_token' },
@@ -148,7 +149,7 @@ export function parseSessionJsonPayload(rawText: string) {
 export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
   const importBusy = ref(false)
   const showImportModal = ref(false)
-  const importMode = ref<AccountImportMode>('access_token')
+  const importMode = ref<AccountImportMode>('password_2fa')
   const importTargetGroupValue = ref('__preserve__')
   const oauthEmailHint = ref('')
   const oauthCallbackText = ref('')
@@ -157,6 +158,8 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
   const oauthRedirectUriPrefix = ref('')
   const manualTokenText = ref('')
   const sessionJsonText = ref('')
+  const password2faText = ref('')
+  const password2faProxy = ref('')
   const toast = useToast()
   const confirmDialog = useConfirmDialog()
 
@@ -449,6 +452,37 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     }
   }
 
+  async function importPassword2faAccounts() {
+    const text = password2faText.value.trim()
+    if (!text) {
+      toast.warning('请输入账号信息')
+      return
+    }
+    importBusy.value = true
+    try {
+      const result = await accountImportsApi.login2FA(
+        text,
+        password2faProxy.value.trim(),
+        targetGroupId(),
+      )
+      const added = Math.max(0, Number(result.added || 0))
+      const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean) : []
+      if (added > 0) {
+        toast.success(`成功登录并导入 ${added} 个账号`)
+        password2faText.value = ''
+        showImportModal.value = false
+        await options.loadData()
+      }
+      if (errors.length > 0) {
+        options.setError('部分账号登录授权失败', errors.join('; '))
+      }
+    } catch (error) {
+      options.setError('2FA 自动登录授权失败', error)
+    } finally {
+      importBusy.value = false
+    }
+  }
+
   async function startOAuthLogin() {
     importBusy.value = true
     try {
@@ -706,12 +740,15 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     oauthRedirectUriPrefix,
     manualTokenText,
     sessionJsonText,
+    password2faText,
+    password2faProxy,
     setImportMode,
     openImportModal,
     closeImportModal,
     importManualTokenText,
     importTokenTextFile,
     importSessionJson,
+    importPassword2faAccounts,
     startOAuthLogin,
     openOAuthAuthorizeUrl,
     copyOAuthAuthorizeUrl,

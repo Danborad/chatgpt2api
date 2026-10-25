@@ -95,12 +95,13 @@
         <span class="text-[11px] text-amber-600/80 dark:text-amber-400/80">无需人工操作，到达设定间隔后自动唤醒</span>
       </div>
 
-      <!-- 分组标签：实时日志 / 配置管理 -->
+      <!-- 分组标签：实时日志 / 配置管理 / 卡密2FA登录 -->
       <ConsoleSegmentedTabs
         v-model="activeTab"
         :options="[
           { value: 'logs', label: `实时日志 (${logs.length})` },
-          { value: 'config', label: '任务与邮箱配置' }
+          { value: 'config', label: '任务与邮箱配置' },
+          { value: 'login2fa', label: '卡密 / 2FA 无头登录' }
         ]"
         aria-label="功能分区"
       />
@@ -520,6 +521,52 @@
           </Button>
         </div>
       </div>
+
+      <!-- Tab 3: 卡密 / 2FA 无头登录 -->
+      <div v-show="activeTab === 'login2fa'" class="space-y-5">
+        <FormSection title="已购卡密 / 2FA 账号无头登录授权" density="roomy">
+          <p class="text-xs text-muted-foreground mb-3">
+            直接粘贴购买的账号卡密，系统使用后台独立无头浏览器自动完成登录、计算 2FA 双重验证码并换取全套 Web 权限与永久 Refresh Token 入库，完全不需要安装或连接 Roxy 指纹浏览器。
+          </p>
+          <div class="space-y-4">
+            <label class="block text-xs">
+              <span class="ui-field-label">账号卡密列表（支持批量，一行一条）</span>
+              <textarea
+                v-model.trim="cardLoginText"
+                rows="7"
+                class="ui-textarea mt-1 w-full font-mono text-xs"
+                placeholder="发货格式：账号----密码----2FA密钥 或 账号----密码&#10;例如：&#10;user@example.com----Password123----ABCDEF234567GHIJ"
+                :disabled="cardLoginBusy"
+              ></textarea>
+            </label>
+
+            <label class="block text-xs">
+              <span class="ui-field-label">登录代理（可选，留空使用系统默认代理出口）</span>
+              <Input
+                v-model.trim="cardLoginProxy"
+                block
+                root-class="font-mono text-xs"
+                placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+                :disabled="cardLoginBusy"
+              />
+            </label>
+
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <span class="text-xs" :class="cardLoginResultMsg.includes('失败') || cardLoginResultMsg.includes('异常') ? 'text-rose-600' : 'text-muted-foreground'">
+                {{ cardLoginResultMsg }}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                :disabled="cardLoginBusy || !cardLoginText.trim()"
+                @click="handleCardLogin"
+              >
+                {{ cardLoginBusy ? '正在登录授权中...' : '开始无头登录入库' }}
+              </Button>
+            </div>
+          </div>
+        </FormSection>
+      </div>
     </PagePanel>
   </div>
 </template>
@@ -532,6 +579,8 @@ import PagePanel from '@/components/ai/PagePanel.vue'
 import PanelHeader from '@/components/ai/PanelHeader.vue'
 import FormSection from '@/components/ai/FormSection.vue'
 import ConsoleSegmentedTabs from '@/components/ai/ConsoleSegmentedTabs.vue'
+import { useToast } from '@/composables/useToast'
+import { accountImportsApi } from '@/api/accountImports'
 import {
   fetchRoxyRegisterConfig,
   startRoxyRegister,
@@ -546,7 +595,7 @@ import {
   type RoxyConfig,
 } from '@/api/register'
 
-const activeTab = ref<'logs' | 'config'>('logs')
+const activeTab = ref<'logs' | 'config' | 'login2fa'>('logs')
 const loading = ref(false)
 const actionLoading = ref(false)
 const savingConfig = ref(false)
@@ -555,6 +604,41 @@ const logContainerRef = ref<HTMLDivElement | null>(null)
 const expandedProviderIndices = ref<number[]>([0])
 const showRoxyToken = ref(false)
 const otpWaitSecondsInput = ref('60')
+
+const cardLoginText = ref('')
+const cardLoginProxy = ref('')
+const cardLoginBusy = ref(false)
+const cardLoginResultMsg = ref('')
+const toast = useToast()
+
+async function handleCardLogin() {
+  const text = cardLoginText.value.trim()
+  if (!text) {
+    toast.warning('请输入账号卡密信息')
+    return
+  }
+  cardLoginBusy.value = true
+  cardLoginResultMsg.value = '正在无头浏览器登录授权中，请稍候...'
+  try {
+    const res = await accountImportsApi.login2FA(text, cardLoginProxy.value.trim())
+    const added = Math.max(0, Number(res.added || 0))
+    const errors = Array.isArray(res.errors) ? res.errors.filter(Boolean) : []
+    if (added > 0) {
+      toast.success(`成功登录并入库 ${added} 个账号`)
+      cardLoginText.value = ''
+      cardLoginResultMsg.value = `本次成功入库 ${added} 个账号${errors.length ? `，失败 ${errors.length} 个` : ''}`
+    } else if (errors.length > 0) {
+      cardLoginResultMsg.value = `登录失败: ${errors.join('; ')}`
+      toast.error('账号登录授权失败')
+    }
+  } catch (error: any) {
+    const msg = error?.response?.data?.detail?.error || error?.message || String(error)
+    cardLoginResultMsg.value = `登录异常: ${msg}`
+    toast.error('2FA 登录授权失败')
+  } finally {
+    cardLoginBusy.value = false
+  }
+}
 
 // 响应式表单字段
 const targetAvailableInput = ref('10')

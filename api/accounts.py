@@ -210,6 +210,39 @@ class OAuthLoginFinishRequest(BaseModel):
     target_group_id: str | None = None
 
 
+class Account2FALoginRequest(BaseModel):
+    """账号密码与 2FA 登录授权请求。"""
+    text: str = ""
+    proxy: str = ""
+    target_group_id: str | None = None
+
+
+def _parse_2fa_account_lines(text: str) -> list[dict[str, str]]:
+    results = []
+    lines = text.strip().splitlines()
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts: list[str] = []
+        for sep in ("----", "---", "\t", " | ", "|", ","):
+            if sep in line:
+                parts = [p.strip() for p in line.split(sep) if p.strip()]
+                break
+        if not parts:
+            parts = [p.strip() for p in line.split() if p.strip()]
+        if len(parts) >= 2:
+            email = parts[0]
+            password = parts[1]
+            two_factor = parts[2] if len(parts) >= 3 else ""
+            results.append({
+                "email": email,
+                "password": password,
+                "two_factor_secret": two_factor,
+            })
+    return results
+
+
 def _account_payload_token(item: dict[str, Any]) -> str:
     return str(item.get("access_token") or item.get("accessToken") or "").strip()
 
@@ -2198,6 +2231,72 @@ def create_router() -> APIRouter:
             synced=0,
             updated_ids=[account_id],
         )
+
+    @router.post("/api/accounts/login-2fa")
+    async def login_2fa_accounts(
+        body: Account2FALoginRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        """通过无头浏览器自动执行账号密码与 2FA 登录，换取完整 Web 权限 Token 并入库。"""
+        require_admin(authorization)
+        items = _parse_2fa_account_lines(body.text)
+        if not items:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "未解析到有效账号，每行格式请参考：账号----密码----2FA密钥 或 账号----密码"},
+            )
+
+        target_group_id = _target_account_group_id(body.target_group_id)
+        explicit_proxy = body.proxy.strip()
+
+        def _do_logins() -> dict:
+            from services.sentinel_solver_client import headless_login
+            from services.proxy_service import proxy_settings
+            added = 0
+            updated_ids: list[str] = []
+            errors: list[str] = []
+
+            default_proxy = proxy_settings.get_profile().proxy_url if hasattr(proxy_settings, "get_profile") else ""
+            proxy_to_use = explicit_proxy or default_proxy or ""
+
+            for item in items:
+                email = item["email"]
+                pwd = item["password"]
+                secret = item["two_factor_secret"]
+                try:
+                    acc_payload = headless_login(
+                        email=email,
+                        password=pwd,
+                        two_factor_secret=secret,
+                        proxy=proxy_to_use,
+                        timeout_secs=120.0,
+                    )
+                    if target_group_id is not None:
+                        acc_payload["group_id"] = target_group_id
+
+                    add_result = account_service.add_account_items([acc_payload], False)
+                    at = acc_payload.get("access_token", "")
+                    try:
+                        account_service.refresh_accounts([at])
+                    except Exception:
+                        pass
+                    acc = account_service.get_account(at)
+                    acc_id = _clean_text((acc or {}).get("management_id"))
+                    if acc_id:
+                        updated_ids.append(acc_id)
+                    added += 1
+                except Exception as exc:
+                    errors.append(f"{email}: {exc}")
+
+            return _account_mutation_payload(
+                added=added,
+                skipped=0,
+                synced=added,
+                updated_ids=updated_ids,
+                errors=errors,
+            )
+
+        return await run_in_threadpool(_do_logins)
 
     @router.get("/api/cpa/pools")
     async def list_cpa_pools(authorization: str | None = Header(default=None)):

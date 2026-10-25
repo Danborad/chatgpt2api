@@ -113,6 +113,12 @@ export const accountImportsApi = {
       { email_hint: emailHint },
     ),
 
+  login2FA: (text: string, proxy = '', targetGroupId: string | null = null) =>
+    apiClient.post<{ text: string; proxy: string; target_group_id: string | null }, AccountMutationResponse>(
+      '/api/accounts/login-2fa',
+      { text, proxy, target_group_id: targetGroupId },
+    ),
+
   finishOAuthLogin: (sessionId: string, callback: string, targetGroupId: string | null = null) =>
     apiClient.post<{ session_id: string; callback: string; target_group_id: string | null }, AccountMutationResponse>(
       '/api/accounts/oauth/finish',

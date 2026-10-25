@@ -596,7 +596,48 @@
               </div>
 
               <div class="min-h-[clamp(26rem,55vh,42rem)] p-4">
-                <div v-if="importMode === 'oauth_login'" class="space-y-3">
+                <div v-if="importMode === 'password_2fa'" class="space-y-3">
+                  <ImportModePanel
+                    title="卡密 / 2FA 自动登录授权"
+                    description="通过无头浏览器自动完成登录与 2FA 计算，自动换取全权限 Web Token 及永久 Refresh Token 入库。"
+                  />
+                  <div class="grid grid-cols-1 gap-3">
+                    <label class="block text-xs">
+                      <span class="ui-field-label">账号信息（支持批量，一行一条）</span>
+                      <textarea
+                        v-model.trim="password2faText"
+                        rows="7"
+                        class="ui-textarea-sm font-mono"
+                        placeholder="发货格式：账号----密码----2FA密钥 或 账号----密码&#10;例如：&#10;user@example.com----Password123----ABCDEF234567GHIJ"
+                        :disabled="importBusy"
+                      ></textarea>
+                    </label>
+
+                    <label class="block text-xs">
+                      <span class="ui-field-label">登录代理（可选，留空使用系统默认代理出口）</span>
+                      <Input
+                        v-model.trim="password2faProxy"
+                        block
+                        root-class="font-mono text-xs"
+                        placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+                        :disabled="importBusy"
+                      />
+                    </label>
+
+                    <div class="flex justify-end pt-1">
+                      <Button
+                        size="xs"
+                        variant="primary"
+                        :disabled="importBusy || !password2faText.trim()"
+                        @click="importPassword2faAccounts"
+                      >
+                        {{ importBusy ? '正在登录授权...' : '开始登录授权' }}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-else-if="importMode === 'oauth_login'" class="space-y-3">
                   <ImportModePanel
                     title="OAuth 登录已有账号"
                     description="用浏览器登录 ChatGPT，回填 callback URL 后保存 RT，用于 AT 临期自动续期。"
@@ -854,6 +895,8 @@ const {
   oauthRedirectUriPrefix,
   manualTokenText,
   sessionJsonText,
+  password2faText,
+  password2faProxy,
   accountGroups,
   proxyGroups,
   accountGroupsLoading,
@@ -915,6 +958,7 @@ const {
   importManualTokenText,
   importTokenTextFile,
   importSessionJson,
+  importPassword2faAccounts,
   startOAuthLogin,
   openOAuthAuthorizeUrl,
   copyOAuthAuthorizeUrl,
