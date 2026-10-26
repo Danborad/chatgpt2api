@@ -431,6 +431,7 @@ export function useAccountsPage() {
     sessionJsonText,
     password2faText: accountImport.password2faText,
     password2faProxy: accountImport.password2faProxy,
+    recognized2FACount: accountImport.recognized2FACount,
     accountGroups,
     proxyGroups,
     accountGroupsLoading,

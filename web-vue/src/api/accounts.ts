@@ -220,7 +220,9 @@ export interface AccountOperationProgress {
     | 'save_accounts'
     | 'publish_results'
     | 'sync_accounts'
+    | 'login_2fa'
     | 'completed'
+    | string
   stage_label?: string
   import_result?: {
     added: number
@@ -418,12 +420,8 @@ export function accountOperationPollDelayMs(elapsedMs: number) {
   return 2_000
 }
 
-async function pollAccountOperation(
-  endpoint:
-    | '/api/accounts/sync'
-    | '/api/accounts/refresh-access-token'
-    | '/api/accounts/batch-update'
-    | '/api/accounts',
+export async function pollAccountOperation(
+  endpoint: string,
   target: AccountSelectionTarget,
   onProgress?: (progress: AccountOperationProgress) => void,
   options?: {

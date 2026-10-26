@@ -53,6 +53,17 @@ HEADLESS = os.getenv("SENTINEL_SOLVER_HEADLESS", "true").strip().lower() not in 
 READY_TIMEOUT_SECONDS = 60
 
 
+def _reap_zombies() -> None:
+    """清理已退出的子进程，防止僵尸进程积累。"""
+    try:
+        while True:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid <= 0:
+                break
+    except Exception:
+        pass
+
+
 class SolverPage:
     """维护一个已通过 Cloudflare 校验的 chatgpt.com 页面，按需重开。"""
 
@@ -62,27 +73,30 @@ class SolverPage:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._opened_at = 0.0
+        self._eval_count = 0
         self._lock = asyncio.Lock()
         self.user_agent = USER_AGENT
         self.last_error = ""
 
+    async def _close_browser_locked(self) -> None:
+        """彻底关闭浏览器与上下文，彻底杀死全部子进程。"""
+        if self._context is not None:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        self._page = None
+        _reap_zombies()
+
     async def start(self) -> None:
         self._playwright = await async_playwright().start()
-        launch_kwargs = {
-            "headless": HEADLESS,
-            # channel="chromium" 使用完整 Chromium 的新版无头模式；默认的 headless shell 过不了 Cloudflare
-            "channel": "chromium",
-            "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
-        }
-        if PROXY:
-            launch_kwargs["proxy"] = {"server": PROXY}
-        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
-        if not self.user_agent:
-            major = self._browser.version.split(".")[0]
-            self.user_agent = (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
-            )
         try:
             await self.page()
         except Exception as exc:  # 启动时页面暂时打不开不致命，首个请求会重试
@@ -90,16 +104,22 @@ class SolverPage:
             print(f"[sentinel-solver] initial page open failed: {exc}", flush=True)
 
     async def stop(self) -> None:
-        if self._context is not None:
-            await self._context.close()
-        if self._browser is not None:
-            await self._browser.close()
-        if self._playwright is not None:
-            await self._playwright.stop()
+        async with self._lock:
+            await self._close_browser_locked()
+            if self._playwright is not None:
+                await self._playwright.stop()
+                self._playwright = None
 
     async def page(self) -> Page:
         async with self._lock:
-            stale = self._page is None or time.monotonic() - self._opened_at > REFRESH_SECONDS
+            _reap_zombies()
+            stale = (
+                self._page is None
+                or self._browser is None
+                or not self._browser.is_connected()
+                or time.monotonic() - self._opened_at > REFRESH_SECONDS
+                or self._eval_count >= 100
+            )
             if not stale and not await self._is_ready(self._page):
                 stale = True
             if stale:
@@ -111,35 +131,56 @@ class SolverPage:
             self._opened_at = 0.0
 
     async def _reopen(self) -> None:
-        if self._context is not None:
-            try:
-                await self._context.close()
-            except Exception:
-                pass
-        self._page = None
-        context_kwargs = {
+        await self._close_browser_locked()
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        launch_kwargs: dict[str, Any] = {
+            "headless": HEADLESS,
+            "channel": "chromium",
+            "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
+        }
+        if PROXY:
+            launch_kwargs["proxy"] = {"server": PROXY}
+        browser = await self._playwright.chromium.launch(**launch_kwargs)
+        self._browser = browser
+
+        if not self.user_agent:
+            major = browser.version.split(".")[0]
+            self.user_agent = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
+            )
+
+        context_kwargs: dict[str, Any] = {
             "locale": "zh-CN",
             "viewport": {"width": 1280, "height": 800},
             "user_agent": self.user_agent,
         }
         if TIMEZONE:
             context_kwargs["timezone_id"] = TIMEZONE
-        context = await self._browser.new_context(**context_kwargs)
+        context = await browser.new_context(**context_kwargs)
         await context.add_init_script(BASE_INIT_SCRIPT)
         await context.add_init_script(VM_SCRIPT)
         await Stealth().apply_stealth_async(context)
         page = await context.new_page()
-        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
-        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
-        while not await self._is_ready(page):
-            if time.monotonic() > deadline:
-                title = await page.title()
-                await context.close()
-                raise RuntimeError(f"chatgpt.com page not ready (title={title!r}), likely stuck on a Cloudflare challenge")
-            await asyncio.sleep(1)
+
+        try:
+            await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
+            deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+            while not await self._is_ready(page):
+                if time.monotonic() > deadline:
+                    title = await page.title()
+                    raise RuntimeError(f"chatgpt.com page not ready (title={title!r}), likely stuck on a Cloudflare challenge")
+                await asyncio.sleep(1)
+        except Exception:
+            await self._close_browser_locked()
+            raise
+
         self._context = context
         self._page = page
         self._opened_at = time.monotonic()
+        self._eval_count = 0
         self.last_error = ""
         print(f"[sentinel-solver] chatgpt.com page ready: {await page.title()!r}", flush=True)
 
@@ -241,30 +282,40 @@ def compute_totp(secret: str) -> str:
 
 
 async def perform_headless_login(
-    browser: Browser,
+    playwright: Playwright,
     email: str,
     password: str,
     two_factor_secret: str = "",
     proxy: str = "",
 ) -> dict[str, Any]:
+    _reap_zombies()
     proxy_server = proxy.strip() or PROXY
-    context_kwargs: dict[str, Any] = {
-        "locale": "zh-CN",
-        "viewport": {"width": 1280, "height": 800},
-        "user_agent": solver.user_agent
-        or (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
+    launch_kwargs: dict[str, Any] = {
+        "headless": HEADLESS,
+        "channel": "chromium",
+        "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
     }
     if proxy_server:
-        context_kwargs["proxy"] = {"server": proxy_server}
+        launch_kwargs["proxy"] = {"server": proxy_server}
 
-    context = await browser.new_context(**context_kwargs)
-    await Stealth().apply_stealth_async(context)
-    page = await context.new_page()
-
+    login_browser = await playwright.chromium.launch(**launch_kwargs)
     try:
+        context_kwargs: dict[str, Any] = {
+            "locale": "zh-CN",
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": solver.user_agent
+            or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+        }
+        if proxy_server:
+            context_kwargs["proxy"] = {"server": proxy_server}
+
+        context = await login_browser.new_context(**context_kwargs)
+        await Stealth().apply_stealth_async(context)
+        page = await context.new_page()
+
         try:
             await page.goto("https://chatgpt.com/auth/login", wait_until="domcontentloaded", timeout=40000)
         except Exception:
@@ -511,7 +562,15 @@ async def perform_headless_login(
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:
-        await context.close()
+        try:
+            await context.close()
+        except Exception:
+            pass
+        try:
+            await login_browser.close()
+        except Exception:
+            pass
+        _reap_zombies()
 
 
 class HeadlessLoginRequest(BaseModel):
@@ -536,15 +595,13 @@ async def solve_so(body: SORequest, authorization: str | None = Header(default=N
 @app.post("/v1/headless-login")
 async def headless_login_endpoint(body: HeadlessLoginRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     require_key(authorization)
-    browser = solver._browser
-    if browser is None or not browser.is_connected():
+    if solver._playwright is None:
         await solver.start()
-        browser = solver._browser
-    if browser is None:
-        return {"ok": False, "error": "Playwright browser 启动失败"}
+    if solver._playwright is None:
+        return {"ok": False, "error": "Playwright 运行环境未就绪"}
     try:
         account = await perform_headless_login(
-            browser,
+            solver._playwright,
             email=body.email.strip(),
             password=body.password.strip(),
             two_factor_secret=body.two_factor_secret.strip(),

@@ -624,14 +624,17 @@
                       />
                     </label>
 
-                    <div class="flex justify-end pt-1">
+                    <div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                      <span :class="recognized2FACount > 0 ? 'text-emerald-600 font-medium' : 'text-muted-foreground'">
+                        {{ recognized2FACount > 0 ? `✓ 已识别 ${recognized2FACount} 个账号卡密` : '暂未识别到账号卡密（每行一条：账号----密码----2FA密钥）' }}
+                      </span>
                       <Button
                         size="xs"
                         variant="primary"
-                        :disabled="importBusy || !password2faText.trim()"
+                        :disabled="importBusy || recognized2FACount === 0"
                         @click="importPassword2faAccounts"
                       >
-                        {{ importBusy ? '正在登录授权...' : '开始登录授权' }}
+                        {{ importBusy ? '正在提交任务...' : (recognized2FACount > 0 ? `开始登录授权 (${recognized2FACount})` : '开始登录授权') }}
                       </Button>
                     </div>
                   </div>
@@ -897,6 +900,7 @@ const {
   sessionJsonText,
   password2faText,
   password2faProxy,
+  recognized2FACount,
   accountGroups,
   proxyGroups,
   accountGroupsLoading,

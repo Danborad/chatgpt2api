@@ -2237,7 +2237,7 @@ def create_router() -> APIRouter:
         body: Account2FALoginRequest,
         authorization: str | None = Header(default=None),
     ):
-        """通过无头浏览器自动执行账号密码与 2FA 登录，换取完整 Web 权限 Token 并入库。"""
+        """通过无头浏览器自动执行账号密码与 2FA 登录，换取完整 Web 权限 Token 并入库（支持后台异步进度追踪）。"""
         require_admin(authorization)
         items = _parse_2fa_account_lines(body.text)
         if not items:
@@ -2248,8 +2248,17 @@ def create_router() -> APIRouter:
 
         target_group_id = _target_account_group_id(body.target_group_id)
         explicit_proxy = body.proxy.strip()
+        progress_id = str(uuid.uuid4())
+        total = len(items)
 
-        def _do_logins() -> dict:
+        account_service.init_refresh_progress(progress_id, total)
+        account_service.update_refresh_progress_stage(
+            progress_id,
+            "login_2fa",
+            f"准备执行 {total} 个账号的 2FA 登录授权",
+        )
+
+        async def _do_login_2fa() -> None:
             from services.sentinel_solver_client import headless_login
             from services.proxy_service import proxy_settings
             added = 0
@@ -2259,44 +2268,84 @@ def create_router() -> APIRouter:
             default_proxy = proxy_settings.get_profile().proxy_url if hasattr(proxy_settings, "get_profile") else ""
             proxy_to_use = explicit_proxy or default_proxy or ""
 
-            for item in items:
-                email = item["email"]
-                pwd = item["password"]
-                secret = item["two_factor_secret"]
-                try:
-                    acc_payload = headless_login(
-                        email=email,
-                        password=pwd,
-                        two_factor_secret=secret,
-                        proxy=proxy_to_use,
-                        timeout_secs=120.0,
+            try:
+                for idx, item in enumerate(items):
+                    email = item["email"]
+                    pwd = item["password"]
+                    secret = item["two_factor_secret"]
+                    account_service.update_refresh_progress_stage(
+                        progress_id,
+                        "login_2fa",
+                        f"正在登录第 {idx + 1}/{total} 个账号: {email}",
                     )
-                    if target_group_id is not None:
-                        acc_payload["group_id"] = target_group_id
-
-                    add_result = account_service.add_account_items([acc_payload], False)
-                    at = acc_payload.get("access_token", "")
                     try:
-                        account_service.refresh_accounts([at])
-                    except Exception:
-                        pass
-                    acc = account_service.get_account(at)
-                    acc_id = _clean_text((acc or {}).get("management_id"))
-                    if acc_id:
-                        updated_ids.append(acc_id)
-                    added += 1
-                except Exception as exc:
-                    errors.append(f"{email}: {exc}")
+                        acc_payload = await run_in_threadpool(
+                            headless_login,
+                            email=email,
+                            password=pwd,
+                            two_factor_secret=secret,
+                            proxy=proxy_to_use,
+                            timeout_secs=120.0,
+                        )
+                        if target_group_id is not None:
+                            acc_payload["group_id"] = target_group_id
 
-            return _account_mutation_payload(
-                added=added,
-                skipped=0,
-                synced=added,
-                updated_ids=updated_ids,
-                errors=errors,
-            )
+                        await run_in_threadpool(account_service.add_account_items, [acc_payload], False)
+                        at = acc_payload.get("access_token", "")
+                        try:
+                            await run_in_threadpool(account_service.refresh_accounts, [at])
+                        except Exception:
+                            pass
+                        acc = account_service.get_account(at)
+                        acc_id = _clean_text((acc or {}).get("management_id"))
+                        if acc_id:
+                            updated_ids.append(acc_id)
+                        added += 1
+                        account_service.update_refresh_progress(
+                            progress_id,
+                            at,
+                            acc_payload,
+                            account_id=acc_id or email,
+                            account_label=email,
+                            action="login_2fa",
+                            event_status="success",
+                            event_message=f"登录授权成功 (Plan: {acc_payload.get('plan_type') or 'Free'})",
+                        )
+                    except Exception as exc:
+                        err_msg = str(exc)
+                        errors.append(f"{email}: {err_msg}")
+                        account_service.update_refresh_progress(
+                            progress_id,
+                            "",
+                            {"status": "异常", "quota": 0},
+                            account_id=email,
+                            account_label=email,
+                            action="login_2fa",
+                            event_status="failed",
+                            event_message=f"登录授权失败: {err_msg}",
+                        )
 
-        return await run_in_threadpool(_do_logins)
+                res = _account_mutation_payload(
+                    added=added,
+                    skipped=0,
+                    synced=added,
+                    updated_ids=updated_ids,
+                    errors=errors,
+                    include_items=False,
+                )
+                account_service.finish_refresh_progress(progress_id, res)
+            except Exception as outer_exc:
+                account_service.finish_refresh_progress(
+                    progress_id,
+                    error=f"批量登录异常: {outer_exc}",
+                )
+
+        _schedule_account_operation(_do_login_2fa())
+        return {
+            "progress_id": progress_id,
+            "total": total,
+            "status": "started",
+        }
 
     @router.get("/api/cpa/pools")
     async def list_cpa_pools(authorization: str | None = Header(default=None)):

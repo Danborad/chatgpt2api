@@ -1,4 +1,4 @@
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 
 import { accountsApi, type AccountImportPayload, type AccountSourceType } from '@/api/accounts'
 import {
@@ -57,6 +57,33 @@ function parseTokenLines(text: string) {
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith('#')),
   )
+}
+
+export function parse2FAAccountLines(text: string): Array<{ email: string; password: string; two_factor_secret?: string }> {
+  const results: Array<{ email: string; password: string; two_factor_secret?: string }> = []
+  const lines = text.trim().split(/\r?\n/)
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    let parts: string[] = []
+    for (const sep of ['----', '---', '\t', ' | ', '|', ',']) {
+      if (line.includes(sep)) {
+        parts = line.split(sep).map((p) => p.trim()).filter(Boolean)
+        break
+      }
+    }
+    if (!parts.length) {
+      parts = line.split(/\s+/).map((p) => p.trim()).filter(Boolean)
+    }
+    if (parts.length >= 2) {
+      results.push({
+        email: parts[0],
+        password: parts[1],
+        two_factor_secret: parts.length >= 3 ? parts[2] : '',
+      })
+    }
+  }
+  return results
 }
 
 export function parseAccountArchive(rawText: string, label: string) {
@@ -160,6 +187,7 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
   const sessionJsonText = ref('')
   const password2faText = ref('')
   const password2faProxy = ref('')
+  const recognized2FACount = computed(() => parse2FAAccountLines(password2faText.value).length)
   const toast = useToast()
   const confirmDialog = useConfirmDialog()
 
@@ -458,24 +486,40 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
       toast.warning('请输入账号信息')
       return
     }
+    const accounts = parse2FAAccountLines(text)
+    if (!accounts.length) {
+      toast.warning('未检测到有效卡密格式（格式：账号----密码----2FA密钥）')
+      return
+    }
+
     importBusy.value = true
+    showImportModal.value = false
+    const total = accounts.length
+    await options.bulkProgress.start('卡密 / 2FA 登录授权', total, 'import')
+    options.bulkProgress.update({
+      total,
+      processed: 0,
+      stage: 'login_2fa',
+      stage_label: `准备登录授权 ${total} 个账号`,
+    })
+
     try {
-      const result = await accountImportsApi.login2FA(
+      await accountImportsApi.login2FAWithProgress(
         text,
         password2faProxy.value.trim(),
         targetGroupId(),
+        (progress) => {
+          options.bulkProgress.update({
+            ...progress,
+            total,
+            processed: Math.min(total, Number(progress.processed || 0)),
+          })
+        },
+        total,
       )
-      const added = Math.max(0, Number(result.added || 0))
-      const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean) : []
-      if (added > 0) {
-        toast.success(`成功登录并导入 ${added} 个账号`)
-        password2faText.value = ''
-        showImportModal.value = false
-        await options.loadData()
-      }
-      if (errors.length > 0) {
-        options.setError('部分账号登录授权失败', errors.join('; '))
-      }
+      toast.success('卡密 / 2FA 批量登录授权已完成')
+      password2faText.value = ''
+      await options.loadData()
     } catch (error) {
       options.setError('2FA 自动登录授权失败', error)
     } finally {
@@ -742,6 +786,7 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     sessionJsonText,
     password2faText,
     password2faProxy,
+    recognized2FACount,
     setImportMode,
     openImportModal,
     closeImportModal,

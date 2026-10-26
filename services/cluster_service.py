@@ -44,6 +44,16 @@ DEFAULT_CLUSTER_CONFIG: dict[str, Any] = {
 }
 
 
+def _is_error_response(res: Any) -> bool:
+    if res is None:
+        return True
+    if isinstance(res, (Response, JSONResponse)):
+        return res.status_code >= 400
+    if isinstance(res, dict):
+        return bool(res.get("error")) or res.get("_call_status") == "failed"
+    return False
+
+
 class ClusterService:
     def __init__(self, store_file: Path = CLUSTER_FILE) -> None:
         self._store_file = store_file
@@ -401,11 +411,21 @@ class ClusterService:
         excluded: set[str] = set()
         retry_on_failure = bool(self._config.get("retry_on_failure", True))
         strategy = str(self._config.get("strategy") or "local_first")
+        last_error_res = None
 
         # 策略为 local_first 时，先尝试本地
         if strategy == "local_first":
             try:
-                return await local_handler()
+                local_res = await local_handler()
+                if not _is_error_response(local_res):
+                    return local_res
+                logger.warning({
+                    "event": "cluster_local_first_failed",
+                    "status_code": getattr(local_res, "status_code", None),
+                    "msg": "本地执行返回错误响应，自动启动集群故障转移至远程节点...",
+                })
+                last_error_res = local_res
+                excluded.add("local")
             except Exception as local_err:
                 logger.warning({
                     "event": "cluster_local_first_failed",
@@ -418,10 +438,8 @@ class ClusterService:
         while True:
             target = self.pick_target(excluded)
             if not target:
-                if "local" in excluded and strategy == "local_first":
-                    # 全部节点均失败，直接让调用方抛错
-                    return None
-                # 没有候选目标了
+                if last_error_res is not None:
+                    return last_error_res
                 return None
 
             target_type = target["type"]
@@ -430,7 +448,15 @@ class ClusterService:
             if target_type == "local":
                 try:
                     call.summary = f"{call.summary} (本地)"
-                    return await local_handler()
+                    res = await local_handler()
+                    if not _is_error_response(res):
+                        return res
+                    logger.warning({"event": "cluster_target_local_failed", "status_code": getattr(res, "status_code", None)})
+                    last_error_res = res
+                    excluded.add("local")
+                    if not retry_on_failure:
+                        return res
+                    continue
                 except Exception as exc:
                     logger.warning({"event": "cluster_target_local_failed", "error": str(exc)[:200]})
                     excluded.add("local")
@@ -442,7 +468,19 @@ class ClusterService:
             node = target["node"]
             try:
                 call.summary = f"{call.summary} [集群:{node.get('name')}]"
-                return await run_in_threadpool(self.forward_remote_request, node, path, payload, stream)
+                remote_res = await run_in_threadpool(self.forward_remote_request, node, path, payload, stream)
+                if not _is_error_response(remote_res):
+                    return remote_res
+                logger.warning({
+                    "event": "cluster_node_forward_returned_error",
+                    "node_name": node.get("name"),
+                    "status_code": getattr(remote_res, "status_code", None),
+                })
+                last_error_res = remote_res
+                excluded.add(target_id)
+                if not retry_on_failure:
+                    return remote_res
+                continue
             except Exception as exc:
                 logger.warning({
                     "event": "cluster_node_forward_failed",

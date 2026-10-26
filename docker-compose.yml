@@ -6,12 +6,13 @@ services:
     image: chatgpt2api-sentinel-solver:local
     container_name: chatgpt2api-sentinel-solver
     restart: unless-stopped
+    init: true
     network_mode: host
     environment:
       - HOST=127.0.0.1
       - PORT=35780
       - SENTINEL_SOLVER_KEY=${SENTINEL_SOLVER_KEY:-solver-secret-key-1314}
-      - SENTINEL_SOLVER_PROXY=${SENTINEL_SOLVER_PROXY:-http://127.0.0.1:7890}
+      - SENTINEL_SOLVER_PROXY=${SENTINEL_SOLVER_PROXY:-}
       - SENTINEL_SOLVER_TIMEZONE=Asia/Shanghai
       - SENTINEL_SOLVER_HEADLESS=true
 

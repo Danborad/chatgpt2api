@@ -540,6 +540,12 @@
               ></textarea>
             </label>
 
+            <div class="flex items-center justify-between text-xs -mt-2">
+              <span :class="cardLoginRecognizedCount > 0 ? 'text-emerald-600 font-medium' : 'text-muted-foreground'">
+                {{ cardLoginRecognizedCount > 0 ? `✓ 已识别 ${cardLoginRecognizedCount} 个账号卡密` : '暂未识别到账号卡密（每行一条：账号----密码----2FA密钥）' }}
+              </span>
+            </div>
+
             <label class="block text-xs">
               <span class="ui-field-label">登录代理（可选，留空使用系统默认代理出口）</span>
               <Input
@@ -581,6 +587,7 @@ import FormSection from '@/components/ai/FormSection.vue'
 import ConsoleSegmentedTabs from '@/components/ai/ConsoleSegmentedTabs.vue'
 import { useToast } from '@/composables/useToast'
 import { accountImportsApi } from '@/api/accountImports'
+import { parse2FAAccountLines } from '@/views/accounts/accountImportRuntime'
 import {
   fetchRoxyRegisterConfig,
   startRoxyRegister,
@@ -609,6 +616,7 @@ const cardLoginText = ref('')
 const cardLoginProxy = ref('')
 const cardLoginBusy = ref(false)
 const cardLoginResultMsg = ref('')
+const cardLoginRecognizedCount = computed(() => parse2FAAccountLines(cardLoginText.value).length)
 const toast = useToast()
 
 async function handleCardLogin() {
@@ -617,20 +625,27 @@ async function handleCardLogin() {
     toast.warning('请输入账号卡密信息')
     return
   }
+  const accounts = parse2FAAccountLines(text)
+  if (!accounts.length) {
+    toast.warning('未检测到有效卡密格式')
+    return
+  }
+
   cardLoginBusy.value = true
-  cardLoginResultMsg.value = '正在无头浏览器登录授权中，请稍候...'
+  cardLoginResultMsg.value = `正在启动无头浏览器，准备登录 ${accounts.length} 个账号...`
   try {
-    const res = await accountImportsApi.login2FA(text, cardLoginProxy.value.trim())
-    const added = Math.max(0, Number(res.added || 0))
-    const errors = Array.isArray(res.errors) ? res.errors.filter(Boolean) : []
-    if (added > 0) {
-      toast.success(`成功登录并入库 ${added} 个账号`)
-      cardLoginText.value = ''
-      cardLoginResultMsg.value = `本次成功入库 ${added} 个账号${errors.length ? `，失败 ${errors.length} 个` : ''}`
-    } else if (errors.length > 0) {
-      cardLoginResultMsg.value = `登录失败: ${errors.join('; ')}`
-      toast.error('账号登录授权失败')
-    }
+    const res = await accountImportsApi.login2FAWithProgress(
+      text,
+      cardLoginProxy.value.trim(),
+      null,
+      (progress) => {
+        cardLoginResultMsg.value = progress.stage_label || `已完成 ${progress.processed}/${progress.total} 个账号`
+      },
+      accounts.length,
+    )
+    toast.success('卡密 / 2FA 批量登录授权已完成')
+    cardLoginText.value = ''
+    cardLoginResultMsg.value = '登录授权任务已完成，账号已成功保存入库'
   } catch (error: any) {
     const msg = error?.response?.data?.detail?.error || error?.message || String(error)
     cardLoginResultMsg.value = `登录异常: ${msg}`

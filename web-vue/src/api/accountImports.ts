@@ -1,9 +1,11 @@
 import apiClient from './client'
-import type {
-  AccountMutationResponse,
-  AccountOperationEvent,
-  AccountOperationSummaryItem,
-  AccountOperationTone,
+import {
+  pollAccountOperation,
+  type AccountMutationResponse,
+  type AccountOperationEvent,
+  type AccountOperationProgress,
+  type AccountOperationSummaryItem,
+  type AccountOperationTone,
 } from './accounts'
 
 export interface OAuthLoginStartResponse {
@@ -117,6 +119,20 @@ export const accountImportsApi = {
     apiClient.post<{ text: string; proxy: string; target_group_id: string | null }, AccountMutationResponse>(
       '/api/accounts/login-2fa',
       { text, proxy, target_group_id: targetGroupId },
+    ),
+
+  login2FAWithProgress: (
+    text: string,
+    proxy = '',
+    targetGroupId: string | null = null,
+    onProgress?: (progress: AccountOperationProgress) => void,
+    targetCount?: number,
+  ) =>
+    pollAccountOperation(
+      '/api/accounts/login-2fa',
+      { text, proxy, target_group_id: targetGroupId } as any,
+      onProgress,
+      { targetCount },
     ),
 
   finishOAuthLogin: (sessionId: string, callback: string, targetGroupId: string | null = null) =>
