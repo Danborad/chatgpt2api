@@ -12,7 +12,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.auth import (
     UserKeyCreateRequest,
@@ -211,35 +211,156 @@ class OAuthLoginFinishRequest(BaseModel):
 
 
 class Account2FALoginRequest(BaseModel):
-    """账号密码与 2FA 登录授权请求。"""
+    """账号密码与 2FA 登录授权请求（支持直接传参或包裹在 selection 中）。"""
+    model_config = ConfigDict(extra="allow")
     text: str = ""
     proxy: str = ""
     target_group_id: str | None = None
+    selection: dict[str, Any] | None = None
 
 
-def _parse_2fa_account_lines(text: str) -> list[dict[str, str]]:
-    results = []
-    lines = text.strip().splitlines()
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+def _smart_parse_2fa_accounts(text: str) -> list[dict[str, str]]:
+    """超强智能卡密解析器：
+    支持单行多分隔符（----, ---, --, |, \t, 冒号, 空格等）；
+    支持键值标签（账号: xxx 密码: yyy 2FA: zzz）；
+    支持行首序号（1. / [1] / 第1张）；
+    支持 2FA 括号说明或 otpauth:// 协议 URL；
+    支持多行形式（一行账号，下一行密码，再下一行2FA）。
+    """
+    if not text or not text.strip():
+        return []
+
+    results: list[dict[str, str]] = []
+    # 规范的邮箱正则：顶级域名为 2~24 位字母，不可包含减号
+    email_re = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}')
+    # 匹配 otpauth 协议链接中的 secret 参数
+    otpauth_re = re.compile(r'otpauth://[^\s"\']+?[?&]secret=([a-zA-Z2-7=]+)', re.IGNORECASE)
+    # 标准 Base32 Token 正则（去除空格后，长度 16 到 64 位，仅包含 A-Z 和 2-7）
+    base32_token_re = re.compile(r'^[A-Za-z2-7]{16,64}={0,6}$')
+
+    raw_lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+
+        # 忽略不含邮箱的发货注释说明行
+        if line.startswith("#") or (("发货" in line or "使用说明" in line or "不要" in line) and not email_re.search(line)):
+            i += 1
             continue
-        parts: list[str] = []
-        for sep in ("----", "---", "\t", " | ", "|", ","):
-            if sep in line:
-                parts = [p.strip() for p in line.split(sep) if p.strip()]
-                break
-        if not parts:
-            parts = [p.strip() for p in line.split() if p.strip()]
-        if len(parts) >= 2:
-            email = parts[0]
-            password = parts[1]
-            two_factor = parts[2] if len(parts) >= 3 else ""
+
+        emails = email_re.findall(line)
+        if not emails:
+            i += 1
+            continue
+
+        email = emails[0].strip()
+
+        # 检查是否为多行模式（当前行包含邮箱，下一行包含“密码”标识）
+        if i + 1 < len(raw_lines):
+            next_l = raw_lines[i + 1]
+            if not email_re.search(next_l) and any(k in next_l.lower() for k in ("密码", "password", "pwd", "pass")):
+                pwd_match = re.search(r'(?:密码|password|pwd|pass)[:：\s]+([^\s]+)', next_l, re.IGNORECASE)
+                pwd = pwd_match.group(1).strip() if pwd_match else next_l.split()[-1].strip()
+                two_fa = ""
+                i += 2
+                if i < len(raw_lines):
+                    third_l = raw_lines[i]
+                    if not email_re.search(third_l) and any(k in third_l.lower() for k in ("2fa", "密钥", "secret", "key", "totp", "验证码")):
+                        m3 = re.search(r'(?:2fa|密钥|secret|key|totp|验证码)[:：\s]+([A-Za-z2-7]{16,64})', third_l, re.IGNORECASE)
+                        if m3:
+                            two_fa = m3.group(1).strip().upper()
+                        else:
+                            for token in re.split(r'[\s:：]+', third_l):
+                                clean_t = token.replace(" ", "").upper()
+                                if base32_token_re.match(clean_t):
+                                    two_fa = clean_t
+                                    break
+                        i += 1
+                results.append({"email": email, "password": pwd, "two_factor_secret": two_fa})
+                continue
+
+        # 单行模式解析
+        two_fa = ""
+        # 1. 优先提取 otpauth://
+        otp_m = otpauth_re.search(line)
+        line_clean = line
+        if otp_m:
+            two_fa = otp_m.group(1).strip().upper()
+            line_clean = line[:otp_m.start()] + " " + line[otp_m.end():]
+
+        # 2. 剥离中文括号备注，如 "(2fa码，获取地址2fa.run)"
+        line_clean = re.sub(r'\(.*?\)|（.*?）', '', line_clean).strip()
+
+        # 3. 截取 email 之后的内容，天然剔除行首所有序号和废话
+        em_idx = line_clean.find(email)
+        if em_idx != -1:
+            after_email = line_clean[em_idx + len(email):].strip()
+        else:
+            after_email = line_clean
+
+        # 4. 显式 2FA 标签提取：2fa: xxx / 密钥: xxx / secret: xxx
+        if not two_fa:
+            twofa_label_m = re.search(r'(?:2fa|密钥|secret|key|totp|验证码)[:：\s]+([A-Za-z2-7]{16,64})', after_email, re.IGNORECASE)
+            if twofa_label_m:
+                two_fa = twofa_label_m.group(1).strip().upper()
+                after_email = after_email[:twofa_label_m.start()] + " " + after_email[twofa_label_m.end():]
+                after_email = after_email.strip()
+
+        # 5. 显式密码标签提取：密码: xxx / password: xxx
+        password = ""
+        pwd_label_m = re.search(r'(?:密码|password|pwd|pass)[:：\s]+([^\s]+)', after_email, re.IGNORECASE)
+        if pwd_label_m:
+            password = pwd_label_m.group(1).strip()
+            after_email = after_email[:pwd_label_m.start()] + " " + after_email[pwd_label_m.end():]
+            after_email = after_email.strip()
+
+        # 剥离前导多余分隔符
+        after_email = re.sub(r'^[\s\-_|:,]+', '', after_email).strip()
+
+        if password:
+            if not two_fa and after_email:
+                b32_match = re.search(r'\b([A-Za-z2-7]{16,64})\b', after_email)
+                if b32_match:
+                    two_fa = b32_match.group(1).upper()
+            results.append({"email": email, "password": password, "two_factor_secret": two_fa})
+            i += 1
+            continue
+
+        # 6. 常规分隔符智能切分（----, ---, --, |, \t, 双冒号, 逗号或空格）
+        sep_pattern = re.compile(r'\s*(?:----+|---+|--+|[|:,]|\t+)\s*')
+        parts = [p.strip() for p in sep_pattern.split(after_email) if p.strip()]
+        if len(parts) <= 1:
+            parts = [p.strip() for p in after_email.split() if p.strip()]
+
+        clean_parts = []
+        for p in parts:
+            p_clean = re.sub(r'^(?:账号|账户|邮箱|user|username|email|密码|password|pwd|pass|2fa|密钥|secret|key|totp)[:：\s-]*', '', p, flags=re.IGNORECASE).strip()
+            if p_clean:
+                clean_parts.append(p_clean)
+
+        if clean_parts:
+            if not two_fa and len(clean_parts) >= 2:
+                last_token = clean_parts[-1].replace(" ", "").upper()
+                if base32_token_re.match(last_token):
+                    two_fa = last_token
+                    password = clean_parts[0]
+                else:
+                    password = clean_parts[0]
+                    two_fa = clean_parts[1].replace(" ", "").upper()
+            else:
+                password = clean_parts[0]
+                if not two_fa and len(clean_parts) > 1:
+                    two_fa = clean_parts[1].replace(" ", "").upper()
+
+        if email and password:
             results.append({
                 "email": email,
                 "password": password,
-                "two_factor_secret": two_factor,
+                "two_factor_secret": two_fa,
             })
+        i += 1
+
     return results
 
 
@@ -2239,15 +2360,27 @@ def create_router() -> APIRouter:
     ):
         """通过无头浏览器自动执行账号密码与 2FA 登录，换取完整 Web 权限 Token 并入库（支持后台异步进度追踪）。"""
         require_admin(authorization)
-        items = _parse_2fa_account_lines(body.text)
+
+        # 兼容直接传参与被前端 selectionPayload 包裹在 selection 内的情况
+        text_content = str(body.text or "").strip()
+        proxy_val = str(body.proxy or "").strip()
+        group_val = body.target_group_id
+        if not text_content and body.selection and isinstance(body.selection, dict):
+            text_content = str(body.selection.get("text") or "").strip()
+            if not proxy_val:
+                proxy_val = str(body.selection.get("proxy") or "").strip()
+            if group_val is None:
+                group_val = body.selection.get("target_group_id")
+
+        items = _smart_parse_2fa_accounts(text_content)
         if not items:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "未解析到有效账号，每行格式请参考：账号----密码----2FA密钥 或 账号----密码"},
             )
 
-        target_group_id = _target_account_group_id(body.target_group_id)
-        explicit_proxy = body.proxy.strip()
+        target_group_id = _target_account_group_id(group_val)
+        explicit_proxy = proxy_val
         progress_id = str(uuid.uuid4())
         total = len(items)
 

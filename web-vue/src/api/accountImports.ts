@@ -1,6 +1,5 @@
 import apiClient from './client'
 import {
-  pollAccountOperation,
   type AccountMutationResponse,
   type AccountOperationEvent,
   type AccountOperationProgress,
@@ -121,19 +120,41 @@ export const accountImportsApi = {
       { text, proxy, target_group_id: targetGroupId },
     ),
 
-  login2FAWithProgress: (
+  login2FAWithProgress: async (
     text: string,
     proxy = '',
     targetGroupId: string | null = null,
     onProgress?: (progress: AccountOperationProgress) => void,
     targetCount?: number,
-  ) =>
-    pollAccountOperation(
-      '/api/accounts/login-2fa',
-      { text, proxy, target_group_id: targetGroupId } as any,
-      onProgress,
-      { targetCount },
-    ),
+  ) => {
+    const startRes = await apiClient.post<
+      { text: string; proxy: string; target_group_id: string | null },
+      { progress_id: string; total: number; status: string }
+    >('/api/accounts/login-2fa', {
+      text,
+      proxy,
+      target_group_id: targetGroupId,
+    })
+    const progressId = String(startRes.progress_id || '').trim()
+    if (!progressId) return { status: 'ok', progress: null }
+
+    const count = Math.max(1, Number(targetCount || startRes.total || 1))
+    const startedAt = Date.now()
+    const deadline = startedAt + Math.max(120_000, count * 150_000)
+
+    while (Date.now() < deadline) {
+      const rawProgress = await apiClient.get<never, AccountOperationProgress>(
+        `/api/accounts/operations/${encodeURIComponent(progressId)}`,
+      )
+      onProgress?.(rawProgress)
+      if (rawProgress.done || rawProgress.error) {
+        if (rawProgress.error) throw new Error(rawProgress.error)
+        return { status: 'ok', progress: rawProgress }
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    }
+    throw new Error('2FA 批量登录任务超时')
+  },
 
   finishOAuthLogin: (sessionId: string, callback: string, targetGroupId: string | null = null) =>
     apiClient.post<{ session_id: string; callback: string; target_group_id: string | null }, AccountMutationResponse>(

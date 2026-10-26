@@ -60,29 +60,148 @@ function parseTokenLines(text: string) {
 }
 
 export function parse2FAAccountLines(text: string): Array<{ email: string; password: string; two_factor_secret?: string }> {
+  if (!text || !text.trim()) return []
+
   const results: Array<{ email: string; password: string; two_factor_secret?: string }> = []
-  const lines = text.trim().split(/\r?\n/)
-  for (const rawLine of lines) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    let parts: string[] = []
-    for (const sep of ['----', '---', '\t', ' | ', '|', ',']) {
-      if (line.includes(sep)) {
-        parts = line.split(sep).map((p) => p.trim()).filter(Boolean)
-        break
+  const emailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}/g
+  const singleEmailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}/
+  const otpauthRegex = /otpauth:\/\/[^\s"']+?[?&]secret=([a-zA-Z2-7=]+)/i
+  const base32TokenRegex = /^[A-Za-z2-7]{16,64}={0,6}$/
+
+  const rawLines = text.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+
+  let i = 0
+  while (i < rawLines.length) {
+    const line = rawLines[i]
+
+    // 忽略不含邮箱的发货说明或注释行
+    if (line.startsWith('#') || ((line.includes('发货') || line.includes('使用说明') || line.includes('不要')) && !singleEmailRegex.test(line))) {
+      i++
+      continue
+    }
+
+    const emails = line.match(emailRegex)
+    if (!emails || !emails.length) {
+      i++
+      continue
+    }
+
+    const email = emails[0].trim()
+
+    // 检查是否为多行结构（当前行包含邮箱，下一行包含密码标识）
+    if (i + 1 < rawLines.length) {
+      const nextLine = rawLines[i + 1]
+      if (!singleEmailRegex.test(nextLine) && /(?:密码|password|pwd|pass)/i.test(nextLine)) {
+        const pwdMatch = nextLine.match(/(?:密码|password|pwd|pass)[:：\s]+([^\s]+)/i)
+        const pwd = pwdMatch ? pwdMatch[1].trim() : nextLine.split(/\s+/).pop()?.trim() || ''
+        let twoFa = ''
+        i += 2
+        if (i < rawLines.length) {
+          const thirdLine = rawLines[i]
+          if (!singleEmailRegex.test(thirdLine) && /(?:2fa|密钥|secret|key|totp|验证码)/i.test(thirdLine)) {
+            const secretMatch = thirdLine.match(/(?:2fa|密钥|secret|key|totp|验证码)[:：\s]+([A-Za-z2-7]{16,64})/i)
+            if (secretMatch) {
+              twoFa = secretMatch[1].trim().toUpperCase()
+            } else {
+              const tokens = thirdLine.split(/[\s:：]+/).map((t) => t.trim().toUpperCase())
+              const found = tokens.find((t) => base32TokenRegex.test(t))
+              if (found) twoFa = found
+            }
+            i++
+          }
+        }
+        if (pwd) {
+          results.push({ email, password: pwd, two_factor_secret: twoFa })
+          continue
+        }
       }
     }
-    if (!parts.length) {
-      parts = line.split(/\s+/).map((p) => p.trim()).filter(Boolean)
+
+    // 单行模式智能解析
+    let twoFa = ''
+    let lineToParse = line
+
+    // 1. 优先提取 otpauth://
+    const otpMatch = lineToParse.match(otpauthRegex)
+    if (otpMatch) {
+      twoFa = otpMatch[1].trim().toUpperCase()
+      lineToParse = `${lineToParse.slice(0, otpMatch.index)} ${lineToParse.slice(otpMatch.index! + otpMatch[0].length)}`.trim()
     }
-    if (parts.length >= 2) {
-      results.push({
-        email: parts[0],
-        password: parts[1],
-        two_factor_secret: parts.length >= 3 ? parts[2] : '',
-      })
+
+    // 2. 剥离括号备注说明，如 "(2fa码，获取地址2fa.run)"
+    lineToParse = lineToParse.replace(/\(.*?\)|（.*?）/g, '').trim()
+
+    // 3. 截取 email 之后的内容，天然剔除行首所有序号和说明
+    const emailIndex = lineToParse.indexOf(email)
+    let afterEmail = emailIndex !== -1 ? lineToParse.slice(emailIndex + email.length).trim() : lineToParse
+
+    // 4. 显式 2FA 标签提取：2fa: xxx / 密钥: xxx
+    if (!twoFa) {
+      const twoFaLabelMatch = afterEmail.match(/(?:2fa|密钥|secret|key|totp|验证码)[:：\s]+([A-Za-z2-7]{16,64})/i)
+      if (twoFaLabelMatch) {
+        twoFa = twoFaLabelMatch[1].trim().toUpperCase()
+        afterEmail = `${afterEmail.slice(0, twoFaLabelMatch.index)} ${afterEmail.slice(twoFaLabelMatch.index! + twoFaLabelMatch[0].length)}`.trim()
+      }
     }
+
+    // 5. 显式密码标签提取：密码: xxx / password: xxx
+    let password = ''
+    const pwdLabelMatch = afterEmail.match(/(?:密码|password|pwd|pass)[:：\s]+([^\s]+)/i)
+    if (pwdLabelMatch) {
+      password = pwdLabelMatch[1].trim()
+      afterEmail = `${afterEmail.slice(0, pwdLabelMatch.index)} ${afterEmail.slice(pwdLabelMatch.index! + pwdLabelMatch[0].length)}`.trim()
+    }
+
+    // 剥离前导标点与多余中划线
+    afterEmail = afterEmail.replace(/^[\s\-_|:,]+/, '').trim()
+
+    if (password) {
+      if (!twoFa && afterEmail) {
+        const b32Match = afterEmail.match(/\b([A-Za-z2-7]{16,64})\b/)
+        if (b32Match) twoFa = b32Match[1].toUpperCase()
+      }
+      results.push({ email, password, two_factor_secret: twoFa })
+      i++
+      continue
+    }
+
+    // 6. 分隔符切分（----, ---, --, |, \t, 双冒号, 逗号或空格）
+    const sepPattern = /\s*(?:----+|---+|--+|[|:,]|\t+)\s*/
+    let parts = afterEmail.split(sepPattern).map((p) => p.trim()).filter(Boolean)
+    if (parts.length <= 1) {
+      parts = afterEmail.split(/\s+/).map((p) => p.trim()).filter(Boolean)
+    }
+
+    const cleanParts: string[] = []
+    for (const p of parts) {
+      const pClean = p.replace(/^(?:账号|账户|邮箱|user|username|email|密码|password|pwd|pass|2fa|密钥|secret|key|totp)[:：\s-]*/i, '').trim()
+      if (pClean) cleanParts.push(pClean)
+    }
+
+    if (cleanParts.length) {
+      if (!twoFa && cleanParts.length >= 2) {
+        const lastToken = cleanParts[cleanParts.length - 1].replace(/\s+/g, '').toUpperCase()
+        if (base32TokenRegex.test(lastToken)) {
+          twoFa = lastToken
+          password = cleanParts[0]
+        } else {
+          password = cleanParts[0]
+          twoFa = cleanParts[1].replace(/\s+/g, '').toUpperCase()
+        }
+      } else {
+        password = cleanParts[0]
+        if (!twoFa && cleanParts.length > 1) {
+          twoFa = cleanParts[1].replace(/\s+/g, '').toUpperCase()
+        }
+      }
+    }
+
+    if (email && password) {
+      results.push({ email, password, two_factor_secret: twoFa })
+    }
+    i++
   }
+
   return results
 }
 
