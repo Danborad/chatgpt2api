@@ -93,6 +93,15 @@
 
           <FilterToolbar class="accounts-toolbar-group accounts-toolbar-group-refresh" :bordered="false" gap="tight">
             <Button
+              v-if="showRefreshProgress"
+              size="sm"
+              variant="outline"
+              root-class="border-primary/40 text-primary hover:bg-primary/5"
+              @click="setMinimizedRefreshProgress(false)"
+            >
+              {{ refreshProgressTitle || '任务记录' }} ({{ refreshProgressPercent }}%)
+            </Button>
+            <Button
               size="sm"
               variant="outline"
               :root-class="accountToolbarSecondaryClass"
@@ -795,6 +804,7 @@
 
     <AccountOperationDrawer
       :open="showRefreshProgress"
+      :minimized="minimizedRefreshProgress"
       :title="refreshProgressTitle"
       :status-text="refreshProgressStatusText"
       :progress="refreshProgress"
@@ -803,6 +813,7 @@
       :can-stop="canStopRefreshProgress"
       :stop-requested="bulkStopRequested"
       :can-close="canCloseRefreshProgress"
+      @update:minimized="setMinimizedRefreshProgress"
       @stop="requestStopRefreshProgress"
       @close="closeRefreshProgress"
     />
@@ -924,6 +935,8 @@ const {
   accountProxyPreview,
   accountGroupProxyPreview,
   showRefreshProgress,
+  minimizedRefreshProgress,
+  setMinimizedRefreshProgress,
   refreshProgressTitle,
   refreshProgress,
   refreshProgressPercent,

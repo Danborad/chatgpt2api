@@ -206,6 +206,7 @@ export interface AccountOperationEvent {
 }
 
 export interface AccountOperationProgress {
+  progress_id?: string
   total: number
   processed: number
   done: boolean

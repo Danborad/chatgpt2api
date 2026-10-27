@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import random
 import threading
@@ -317,6 +318,53 @@ class ClusterService:
 
         return candidates[0]
 
+    @classmethod
+    def _sanitize_payload_for_forwarding(cls, obj: Any) -> Any:
+        """递归净化请求体，将 bytes、ImageInput (tuple) 或其它不可序列化对象转为标准 Base64 或 Data URL，过滤 callable 回调。"""
+        if isinstance(obj, dict):
+            new_dict = {}
+            for k, v in obj.items():
+                if callable(v):
+                    continue
+                if k in ("images", "mask") and isinstance(v, (list, tuple)):
+                    new_list = []
+                    for item in v:
+                        if isinstance(item, tuple) and len(item) >= 1 and isinstance(item[0], (bytes, bytearray)):
+                            data_bytes = bytes(item[0])
+                            mime = item[2] if len(item) >= 3 and isinstance(item[2], str) else "image/png"
+                            b64 = base64.b64encode(data_bytes).decode("ascii")
+                            new_list.append(f"data:{mime};base64,{b64}")
+                        elif isinstance(item, (bytes, bytearray)):
+                            b64 = base64.b64encode(bytes(item)).decode("ascii")
+                            new_list.append(f"data:image/png;base64,{b64}")
+                        else:
+                            new_list.append(cls._sanitize_payload_for_forwarding(item))
+                    new_dict[k] = new_list
+                else:
+                    new_dict[k] = cls._sanitize_payload_for_forwarding(v)
+            return new_dict
+        elif isinstance(obj, (list, tuple)):
+            new_list = []
+            for item in obj:
+                if callable(item):
+                    continue
+                if isinstance(item, tuple) and len(item) >= 1 and isinstance(item[0], (bytes, bytearray)):
+                    data_bytes = bytes(item[0])
+                    mime = item[2] if len(item) >= 3 and isinstance(item[2], str) else "image/png"
+                    b64 = base64.b64encode(data_bytes).decode("ascii")
+                    new_list.append(f"data:{mime};base64,{b64}")
+                elif isinstance(item, (bytes, bytearray)):
+                    b64 = base64.b64encode(bytes(item)).decode("ascii")
+                    new_list.append(b64)
+                else:
+                    new_list.append(cls._sanitize_payload_for_forwarding(item))
+            return new_list
+        elif isinstance(obj, (bytes, bytearray)):
+            return base64.b64encode(bytes(obj)).decode("ascii")
+        elif callable(obj):
+            return None
+        return obj
+
     def forward_remote_request(
         self,
         node: dict[str, Any],
@@ -345,10 +393,12 @@ class ClusterService:
             "stream": stream,
         })
 
+        forward_payload = self._sanitize_payload_for_forwarding(payload)
+
         if stream:
             resp = requests.post(
                 target_url,
-                json=payload,
+                json=forward_payload,
                 headers=headers,
                 stream=True,
                 timeout=timeout_secs,
@@ -375,7 +425,7 @@ class ClusterService:
 
         resp = requests.post(
             target_url,
-            json=payload,
+            json=forward_payload,
             headers=headers,
             timeout=timeout_secs,
             verify=False,

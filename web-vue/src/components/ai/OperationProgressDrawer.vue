@@ -1,6 +1,6 @@
 <template>
   <DrawerShell
-    :open="open && !minimized"
+    :open="open && !resolvedMinimized"
     :title="title"
     max-width="clamp(22rem, 30vw, 32rem)"
     :z-index="zIndex"
@@ -39,7 +39,7 @@
           <CloseButton
             icon="lucide:minus"
             label="收起任务面板"
-            @click="minimized = true"
+            @click="resolvedMinimized = true"
           />
           <CloseButton
             :disabled="resolvedCloseDisabled"
@@ -115,12 +115,12 @@
   </DrawerShell>
 
   <SideDock
-    :open="open && minimized"
+    :open="open && resolvedMinimized"
     :draggable="true"
     aria-label="展开任务面板"
     :aria-describedby="dockStatusId"
     :z-index="zIndex"
-    @click="minimized = false"
+    @click="resolvedMinimized = false"
   >
     <span class="operation-progress-dock__heading">
       <span class="operation-progress-dock__title">{{ title }}</span>
@@ -149,6 +149,7 @@ import StateBadge from './StateBadge.vue'
 
 const props = withDefaults(defineProps<{
   open: boolean
+  minimized?: boolean
   title: string
   subtitle?: string
   total?: number
@@ -166,6 +167,7 @@ const props = withDefaults(defineProps<{
   events?: OperationTimelineEvent[]
   summaryItems?: OperationSummaryItem[]
 }>(), {
+  minimized: undefined,
   subtitle: '',
   total: 0,
   current: 0,
@@ -186,10 +188,18 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   close: []
   cancel: []
+  'update:minimized': [value: boolean]
 }>()
 
 const eventListRef = ref<HTMLElement | null>(null)
-const minimized = ref(false)
+const internalMinimized = ref(false)
+const resolvedMinimized = computed({
+  get: () => (props.minimized !== undefined ? props.minimized : internalMinimized.value),
+  set: (val: boolean) => {
+    internalMinimized.value = val
+    emit('update:minimized', val)
+  },
+})
 const dockStatusId = `operation-progress-dock-${useId()}`
 let stickToLatest = true
 
@@ -263,7 +273,7 @@ watch(
   () => props.open,
   async (open) => {
     if (!open) {
-      minimized.value = false
+      resolvedMinimized.value = false
       return
     }
     stickToLatest = true
@@ -273,7 +283,7 @@ watch(
   },
 )
 
-watch(minimized, async (value) => {
+watch(resolvedMinimized, async (value) => {
   if (value || !props.open) return
   stickToLatest = true
   await nextTick()

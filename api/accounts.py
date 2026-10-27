@@ -1019,6 +1019,7 @@ def _account_operation_progress_for_api(
     payload = {
         key: progress.get(key)
         for key in (
+            "progress_id",
             "total",
             "processed",
             "done",

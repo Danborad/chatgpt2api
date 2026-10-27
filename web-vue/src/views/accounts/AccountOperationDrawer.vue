@@ -1,6 +1,7 @@
 <template>
   <OperationProgressDrawer
     :open="open"
+    :minimized="minimized"
     :title="title || '账号任务记录'"
     :subtitle="`${processed} / ${total} · ${percent}%`"
     :total="total"
@@ -16,6 +17,7 @@
     :cancel-disabled="stopRequested"
     :cancel-label="stopRequested ? '停止中...' : '停止'"
     :close-disabled="!canClose"
+    @update:minimized="emit('update:minimized', $event)"
     @cancel="emit('stop')"
     @close="emit('close')"
   />
@@ -30,6 +32,7 @@ import type { AccountOperationTimelineEvent } from './accountBulkProgressRuntime
 
 const props = defineProps<{
   open: boolean
+  minimized?: boolean
   title: string
   statusText: string
   progress: AccountOperationProgress | null
@@ -43,6 +46,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   stop: []
+  'update:minimized': [value: boolean]
 }>()
 
 const processed = computed(() => Math.max(0, Number(props.progress?.processed || 0)))

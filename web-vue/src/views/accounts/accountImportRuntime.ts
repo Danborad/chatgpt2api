@@ -635,6 +635,9 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
           })
         },
         total,
+        (progressId) => {
+          options.bulkProgress.recordProgressId(progressId)
+        },
       )
       toast.success('卡密 / 2FA 批量登录授权已完成')
       password2faText.value = ''

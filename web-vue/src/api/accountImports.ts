@@ -126,6 +126,7 @@ export const accountImportsApi = {
     targetGroupId: string | null = null,
     onProgress?: (progress: AccountOperationProgress) => void,
     targetCount?: number,
+    onStarted?: (progressId: string) => void,
   ) => {
     const startRes = await apiClient.post<
       { text: string; proxy: string; target_group_id: string | null },
@@ -137,6 +138,7 @@ export const accountImportsApi = {
     })
     const progressId = String(startRes.progress_id || '').trim()
     if (!progressId) return { status: 'ok', progress: null }
+    onStarted?.(progressId)
 
     const count = Math.max(1, Number(targetCount || startRes.total || 1))
     const startedAt = Date.now()

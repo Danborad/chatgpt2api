@@ -374,9 +374,11 @@ export function useAccountsPage() {
   })
   pageRuntime.onActivate(() => {
     void resumeRemoteImportTracking()
+    void bulkProgress.resumeSession(() => loadData({ silentErrorToast: true }))
   })
   pageRuntime.onShow(() => {
     void resumeRemoteImportTracking()
+    void bulkProgress.resumeSession(() => loadData({ silentErrorToast: true }))
   })
   pageRuntime.onDeactivate(stopRemoteImportTracking)
   pageRuntime.onHide(stopRemoteImportTracking)
@@ -455,6 +457,8 @@ export function useAccountsPage() {
     accountProxyPreview,
     accountGroupProxyPreview,
     showRefreshProgress,
+    minimizedRefreshProgress: bulkProgress.minimized,
+    setMinimizedRefreshProgress: bulkProgress.setMinimized,
     refreshProgressTitle,
     refreshProgress,
     refreshProgressKind,

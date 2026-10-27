@@ -4413,6 +4413,7 @@ class AccountService:
         with self._refresh_progress_lock:
             self._prune_refresh_progress_locked(now, target_id=progress_id)
             self._refresh_progress[progress_id] = {
+                "progress_id": progress_id,
                 "total": total,
                 "processed": 0,
                 "done": False,

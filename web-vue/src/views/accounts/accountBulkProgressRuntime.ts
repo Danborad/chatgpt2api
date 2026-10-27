@@ -1,5 +1,6 @@
 import { computed, nextTick, ref } from 'vue'
 
+import apiClient from '@/api/client'
 import type {
   AccountOperationEvent,
   AccountOperationProgress,
@@ -14,9 +15,21 @@ export interface AccountOperationTimelineEvent extends AccountOperationEvent {
 type AccountBulkProgressPatch = Partial<AccountOperationProgress> & {
   total: number
   processed?: number
+  progress_id?: string
 }
 
 const ACCOUNT_OPERATION_EVENT_LIMIT = 500
+const BULK_PROGRESS_STORAGE_KEY = 'chatgpt2api:bulk_progress_session'
+
+interface BulkProgressSession {
+  progressId?: string
+  title: string
+  total: number
+  kind: AccountBulkProgressKind
+  minimized: boolean
+  startedAt: number
+  updatedAt: number
+}
 
 function cleanText(value: unknown) {
   return String(value || '').trim()
@@ -32,6 +45,52 @@ export function useAccountBulkProgressRuntime() {
   const bulkStopEnabled = ref(false)
   const operationEvents = ref<AccountOperationTimelineEvent[]>([])
   const backendEventKeys = new Set<string>()
+  const minimized = ref(false)
+  const activeProgressId = ref('')
+  let pollTimer: number | null = null
+
+  function saveSession() {
+    if (typeof window === 'undefined') return
+    try {
+      if (!showRefreshProgress.value) {
+        window.localStorage.removeItem(BULK_PROGRESS_STORAGE_KEY)
+        return
+      }
+      const session: BulkProgressSession = {
+        progressId: activeProgressId.value || undefined,
+        title: refreshProgressTitle.value,
+        total: Math.max(0, Number(refreshProgress.value?.total || 0)),
+        kind: refreshProgressKind.value,
+        minimized: minimized.value,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      window.localStorage.setItem(BULK_PROGRESS_STORAGE_KEY, JSON.stringify(session))
+    } catch {
+      // ignore storage error
+    }
+  }
+
+  function clearSession() {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.removeItem(BULK_PROGRESS_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
+  }
+
+  function setMinimized(val: boolean) {
+    minimized.value = val
+    saveSession()
+  }
+
+  function recordProgressId(id: string) {
+    const cleanId = String(id || '').trim()
+    if (!cleanId) return
+    activeProgressId.value = cleanId
+    saveSession()
+  }
 
   function trimEvents() {
     if (operationEvents.value.length <= ACCOUNT_OPERATION_EVENT_LIMIT) return
@@ -115,6 +174,8 @@ export function useAccountBulkProgressRuntime() {
     bulkStopEnabled.value = Boolean(options.stoppable)
     batchBusy.value = true
     showRefreshProgress.value = true
+    minimized.value = false
+    activeProgressId.value = ''
     refreshProgressTitle.value = title
     refreshProgressKind.value = kind
     refreshProgress.value = {
@@ -125,6 +186,7 @@ export function useAccountBulkProgressRuntime() {
       total_quota: kind === 'sync' ? 0 : undefined,
       result: null,
     }
+    saveSession()
     await nextTick()
     if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') return
     await new Promise<void>((resolve) => {
@@ -148,22 +210,30 @@ export function useAccountBulkProgressRuntime() {
 
   function update(patch: AccountBulkProgressPatch) {
     mergeBackendEvents(patch.events)
+    if (patch.progress_id) {
+      activeProgressId.value = String(patch.progress_id).trim()
+    }
     const current = refreshProgress.value || { total: patch.total, processed: 0, done: false }
     refreshProgress.value = {
       ...current,
       ...patch,
       done: patch.done === undefined ? current.done : Boolean(patch.done),
     }
+    saveSession()
   }
 
   function finish(patch: AccountBulkProgressPatch) {
     mergeBackendEvents(patch.events)
+    if (patch.progress_id) {
+      activeProgressId.value = String(patch.progress_id).trim()
+    }
     const progress: AccountOperationProgress = {
       ...(refreshProgress.value || { total: patch.total, processed: patch.processed || 0, done: false }),
       ...patch,
       done: true,
     }
     refreshProgress.value = progress
+    saveSession()
   }
 
   function fail(total: number, processed: number, error: string) {
@@ -175,6 +245,7 @@ export function useAccountBulkProgressRuntime() {
       error,
     }
     refreshProgress.value = progress
+    saveSession()
   }
 
   function requestStop() {
@@ -185,8 +256,73 @@ export function useAccountBulkProgressRuntime() {
 
   function close() {
     if (!refreshProgress.value?.done && batchBusy.value) return false
+    if (pollTimer) {
+      window.clearTimeout(pollTimer)
+      pollTimer = null
+    }
     showRefreshProgress.value = false
+    activeProgressId.value = ''
+    clearSession()
     return true
+  }
+
+  async function pollProgress(progressId: string, onFinished?: () => Promise<void> | void) {
+    if (!progressId) return
+    const runPoll = async () => {
+      try {
+        const res = await apiClient.get<never, AccountOperationProgress>(
+          `/api/accounts/operations/${encodeURIComponent(progressId)}`,
+        )
+        update(res)
+        if (res.done || res.error) {
+          finish(res)
+          end()
+          void Promise.resolve(onFinished?.()).catch(() => {})
+          return
+        }
+      } catch {
+        // 网络短暂异常不中断，等待下一轮重试
+      }
+      if (showRefreshProgress.value && !refreshProgress.value?.done) {
+        pollTimer = window.setTimeout(runPoll, 1000)
+      }
+    }
+    await runPoll()
+  }
+
+  async function resumeSession(onFinished?: () => Promise<void> | void) {
+    if (typeof window === 'undefined') return
+    if (showRefreshProgress.value && batchBusy.value) return
+    try {
+      const raw = window.localStorage.getItem(BULK_PROGRESS_STORAGE_KEY)
+      if (!raw) return
+      const session: BulkProgressSession = JSON.parse(raw)
+      if (!session || !session.title) return
+      // 超过 12 小时的任务自动清理
+      if (Date.now() - Number(session.updatedAt || 0) > 12 * 3600 * 1000) {
+        clearSession()
+        return
+      }
+      showRefreshProgress.value = true
+      minimized.value = Boolean(session.minimized)
+      refreshProgressTitle.value = session.title
+      refreshProgressKind.value = session.kind || 'import'
+      const total = Math.max(0, Number(session.total || 0))
+      refreshProgress.value = {
+        total,
+        processed: 0,
+        done: false,
+        error: null,
+        stage_label: '正在恢复后台任务状态...',
+      }
+      if (session.progressId) {
+        activeProgressId.value = session.progressId
+        batchBusy.value = true
+        await pollProgress(session.progressId, onFinished)
+      }
+    } catch {
+      // ignore
+    }
   }
 
   return {
@@ -202,6 +338,10 @@ export function useAccountBulkProgressRuntime() {
     bulkStopRequested,
     bulkStopEnabled,
     operationEvents,
+    minimized,
+    setMinimized,
+    recordProgressId,
+    resumeSession,
     appendEvents: mergeBackendEvents,
     start,
     end,
