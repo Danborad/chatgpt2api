@@ -4545,11 +4545,29 @@ class AccountService:
                 )
             progress["_updated_at_monotonic"] = now
 
+    def record_refresh_progress_failed_item(
+        self,
+        progress_id: str,
+        item: dict[str, Any],
+    ) -> None:
+        """记录单个失败账号，用于前端展示与一键重试。"""
+        now = time.monotonic()
+        with self._refresh_progress_lock:
+            self._prune_refresh_progress_locked(now, target_id=progress_id)
+            progress = self._refresh_progress.get(progress_id)
+            if progress is None:
+                return
+            if "failed_items" not in progress:
+                progress["failed_items"] = []
+            progress["failed_items"].append(item)
+            progress["_updated_at_monotonic"] = now
+
     def finish_refresh_progress(
         self,
         progress_id: str,
         result: dict | None = None,
         error: str | None = None,
+        failed_items: list[dict[str, Any]] | None = None,
     ) -> None:
         """标记刷新完成。"""
         now = time.monotonic()
@@ -4564,6 +4582,8 @@ class AccountService:
             progress["stage_label"] = ""
             if error:
                 progress["error"] = error
+            if failed_items is not None:
+                progress["failed_items"] = failed_items
             progress["_updated_at_monotonic"] = now
 
     def get_refresh_progress(self, progress_id: str) -> dict | None:

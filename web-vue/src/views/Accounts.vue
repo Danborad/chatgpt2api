@@ -816,6 +816,8 @@
       @update:minimized="setMinimizedRefreshProgress"
       @stop="requestStopRefreshProgress"
       @close="closeRefreshProgress"
+      @retry="retryFailedAccounts"
+      @copy-failed="copyFailedAccounts"
     />
 
     <input ref="manualTokenFileInputRef" type="file" accept=".txt,text/plain" class="hidden" @change="handleManualTokenFileChange" />
@@ -985,6 +987,8 @@ const {
   startRemoteImportTracking,
   requestStopRefreshProgress,
   closeRefreshProgress,
+  retryFailedAccounts,
+  copyFailedAccounts,
   copyAccountCredential,
   openCreateModal,
   openEditModal,

@@ -61,6 +61,35 @@
             <strong :class="summaryValueClass(item.tone)">{{ item.value }}</strong>
           </div>
         </div>
+
+        <div
+          v-if="canRetry && !busy"
+          class="operation-progress-retry-bar mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3.5 py-2.5 text-xs"
+        >
+          <div class="flex min-w-0 items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
+            <Icon icon="lucide:alert-circle" class="h-4 w-4 shrink-0" />
+            <span class="truncate">{{ retryPrompt || '部分账号处理失败' }}</span>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <Button
+              v-if="canCopyFailed"
+              size="xs"
+              variant="outline"
+              root-class="bg-background text-foreground hover:bg-muted"
+              @click="emit('copyFailed')"
+            >
+              {{ copyFailedLabel || '复制失败卡密' }}
+            </Button>
+            <Button
+              size="xs"
+              variant="primary"
+              root-class="border-transparent bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+              @click="emit('retry')"
+            >
+              {{ retryLabel || '重试失败账号' }}
+            </Button>
+          </div>
+        </div>
       </section>
 
       <section class="operation-progress-events" aria-label="任务记录">
@@ -166,6 +195,11 @@ const props = withDefaults(defineProps<{
   tone?: OperationProgressTone
   events?: OperationTimelineEvent[]
   summaryItems?: OperationSummaryItem[]
+  canRetry?: boolean
+  retryLabel?: string
+  retryPrompt?: string
+  canCopyFailed?: boolean
+  copyFailedLabel?: string
 }>(), {
   minimized: undefined,
   subtitle: '',
@@ -183,11 +217,18 @@ const props = withDefaults(defineProps<{
   tone: 'success',
   events: () => [],
   summaryItems: () => [],
+  canRetry: false,
+  retryLabel: '重试失败账号',
+  retryPrompt: '检测到部分账号处理失败',
+  canCopyFailed: false,
+  copyFailedLabel: '复制失败卡密',
 })
 
 const emit = defineEmits<{
   close: []
   cancel: []
+  retry: []
+  copyFailed: []
   'update:minimized': [value: boolean]
 }>()
 

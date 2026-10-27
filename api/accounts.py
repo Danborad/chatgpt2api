@@ -1027,6 +1027,7 @@ def _account_operation_progress_for_api(
             "stage_label",
             "status_counts",
             "total_quota",
+            "failed_items",
         )
         if key in progress
     }
@@ -2398,6 +2399,7 @@ def create_router() -> APIRouter:
             added = 0
             updated_ids: list[str] = []
             errors: list[str] = []
+            failed_items: list[dict[str, str]] = []
 
             default_proxy = proxy_settings.get_profile().proxy_url if hasattr(proxy_settings, "get_profile") else ""
             proxy_to_use = explicit_proxy or default_proxy or ""
@@ -2448,6 +2450,14 @@ def create_router() -> APIRouter:
                     except Exception as exc:
                         err_msg = str(exc)
                         errors.append(f"{email}: {err_msg}")
+                        failed_entry = {
+                            "email": email,
+                            "password": pwd,
+                            "two_factor_secret": secret,
+                            "error": err_msg,
+                        }
+                        failed_items.append(failed_entry)
+                        account_service.record_refresh_progress_failed_item(progress_id, failed_entry)
                         account_service.update_refresh_progress(
                             progress_id,
                             "",
@@ -2467,11 +2477,12 @@ def create_router() -> APIRouter:
                     errors=errors,
                     include_items=False,
                 )
-                account_service.finish_refresh_progress(progress_id, res)
+                account_service.finish_refresh_progress(progress_id, res, failed_items=failed_items)
             except Exception as outer_exc:
                 account_service.finish_refresh_progress(
                     progress_id,
                     error=f"批量登录异常: {outer_exc}",
+                    failed_items=failed_items,
                 )
 
         _schedule_account_operation(_do_login_2fa())

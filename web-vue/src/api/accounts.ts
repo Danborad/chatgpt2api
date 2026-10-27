@@ -205,6 +205,13 @@ export interface AccountOperationEvent {
   message: string
 }
 
+export interface Failed2FAAccountItem {
+  email: string
+  password: string
+  two_factor_secret?: string
+  error?: string
+}
+
 export interface AccountOperationProgress {
   progress_id?: string
   total: number
@@ -215,6 +222,7 @@ export interface AccountOperationProgress {
   tone?: AccountOperationTone
   message?: string
   summary_items?: AccountOperationSummaryItem[]
+  failed_items?: Failed2FAAccountItem[]
   stage?:
     | 'read_credentials'
     | 'prepare_accounts'

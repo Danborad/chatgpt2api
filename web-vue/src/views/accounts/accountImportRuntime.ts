@@ -599,22 +599,36 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     }
   }
 
-  async function importPassword2faAccounts() {
-    const text = password2faText.value.trim()
-    if (!text) {
-      toast.warning('请输入账号信息')
-      return
-    }
-    const accounts = parse2FAAccountLines(text)
-    if (!accounts.length) {
-      toast.warning('未检测到有效卡密格式（格式：账号----密码----2FA密钥）')
-      return
+  async function importPassword2faAccounts(
+    retryItems?: Array<{ email: string; password: string; two_factor_secret?: string }>,
+  ) {
+    const isRetry = Array.isArray(retryItems) && retryItems.length > 0
+    let text = ''
+    let accounts: Array<{ email: string; password: string; two_factor_secret?: string }> = []
+
+    if (isRetry) {
+      accounts = retryItems
+      text = retryItems
+        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}`)
+        .join('\n')
+    } else {
+      text = password2faText.value.trim()
+      if (!text) {
+        toast.warning('请输入账号信息')
+        return
+      }
+      accounts = parse2FAAccountLines(text)
+      if (!accounts.length) {
+        toast.warning('未检测到有效卡密格式（格式：账号----密码----2FA密钥）')
+        return
+      }
     }
 
     importBusy.value = true
     showImportModal.value = false
     const total = accounts.length
-    await options.bulkProgress.start('卡密 / 2FA 登录授权', total, 'import')
+    const taskTitle = isRetry ? `重试卡密 / 2FA 登录授权 (${total})` : '卡密 / 2FA 登录授权'
+    await options.bulkProgress.start(taskTitle, total, 'import')
     options.bulkProgress.update({
       total,
       processed: 0,
@@ -639,8 +653,8 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
           options.bulkProgress.recordProgressId(progressId)
         },
       )
-      toast.success('卡密 / 2FA 批量登录授权已完成')
-      password2faText.value = ''
+      toast.success(isRetry ? '失败账号重试登录授权完成' : '卡密 / 2FA 批量登录授权已完成')
+      if (!isRetry) password2faText.value = ''
       await options.loadData()
     } catch (error) {
       options.setError('2FA 自动登录授权失败', error)

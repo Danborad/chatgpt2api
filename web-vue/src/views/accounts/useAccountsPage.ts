@@ -329,6 +329,32 @@ export function useAccountsPage() {
     bulkProgress.close()
   }
 
+  async function retryFailedAccounts() {
+    const failedItems = bulkProgress.refreshProgress.value?.failed_items
+    if (!failedItems || !failedItems.length) {
+      toast.warning('暂无失败账号可供重试')
+      return
+    }
+    await accountImport.importPassword2faAccounts(failedItems)
+  }
+
+  async function copyFailedAccounts() {
+    const failedItems = bulkProgress.refreshProgress.value?.failed_items
+    if (!failedItems || !failedItems.length) {
+      toast.warning('暂无失败账号可供复制')
+      return
+    }
+    const lines = failedItems
+      .map((item) => `${item.email}----${item.password}----${item.two_factor_secret || ''}`)
+      .join('\n')
+    try {
+      await navigator.clipboard.writeText(lines)
+      toast.success(`已复制 ${failedItems.length} 个失败账号卡密`)
+    } catch {
+      toast.error('复制到剪贴板失败，请手动选择复制')
+    }
+  }
+
   const openCreateModal = accountCrud.openCreateModal
   const openEditModal = accountCrud.openEditModal
   const closeModal = accountCrud.closeModal
@@ -507,6 +533,8 @@ export function useAccountsPage() {
     startRemoteImportTracking,
     requestStopRefreshProgress,
     closeRefreshProgress,
+    retryFailedAccounts,
+    copyFailedAccounts,
     loadData,
     copyAccountCredential,
     openCreateModal,
