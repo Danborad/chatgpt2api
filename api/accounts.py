@@ -2391,16 +2391,36 @@ def create_router() -> APIRouter:
                 detail={"error": "未解析到有效账号，每行格式请参考：账号----密码----2FA密钥 或 账号----密码"},
             )
 
+        # 自动过滤系统中已存在的正常/限流账号，避免重复登录
+        existing_emails = {
+            str(a.get("email")).strip().lower()
+            for a in account_service.list_accounts()
+            if a.get("email") and a.get("status") in ("正常", "限流")
+        }
+        filtered_items = [it for it in items if it["email"].lower() not in existing_emails]
+        skipped_count = len(items) - len(filtered_items)
+        if not filtered_items:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"提交的 {len(items)} 个账号均已在系统中正常存在，无需重复登录"},
+            )
+        items = filtered_items
+
         target_group_id = _target_account_group_id(group_val)
         explicit_proxy = proxy_val
         progress_id = str(uuid.uuid4())
         total = len(items)
 
         account_service.init_refresh_progress(progress_id, total)
+        stage_desc = (
+            f"已自动跳过 {skipped_count} 个已有账号，准备执行 {total} 个新账号的 2FA 登录授权"
+            if skipped_count > 0
+            else f"准备执行 {total} 个账号的 2FA 登录授权"
+        )
         account_service.update_refresh_progress_stage(
             progress_id,
             "login_2fa",
-            f"准备执行 {total} 个账号的 2FA 登录授权",
+            stage_desc,
         )
 
         async def _do_login_2fa() -> None:
@@ -2438,7 +2458,7 @@ def create_router() -> APIRouter:
                             password=pwd,
                             two_factor_secret=secret,
                             proxy=proxy_to_use,
-                            timeout_secs=120.0,
+                            timeout_secs=180.0,
                         )
                         if target_group_id is not None:
                             acc_payload["group_id"] = target_group_id

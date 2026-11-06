@@ -211,6 +211,7 @@ export function useAccountsPage() {
 
   const accountImport = useAccountImportRuntime({
     bulkProgress,
+    accounts,
     normalizeErrorMessage,
     setError,
     loadData,
@@ -463,6 +464,9 @@ export function useAccountsPage() {
     sessionJsonText,
     password2faText: accountImport.password2faText,
     password2faProxy: accountImport.password2faProxy,
+    filterExisting2FAAccounts: accountImport.filterExisting2FAAccounts,
+    filteredExistingCount: accountImport.filteredExistingCount,
+    recognizedSummaryText: accountImport.recognizedSummaryText,
     recognized2FACount: accountImport.recognized2FACount,
     accountGroups,
     proxyGroups,

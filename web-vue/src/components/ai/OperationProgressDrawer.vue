@@ -12,25 +12,25 @@
     @close="emit('close')"
   >
     <div class="operation-progress-layout" role="region" :aria-label="title">
-      <header class="operation-progress-header">
-        <div class="min-w-0">
-          <div class="flex min-w-0 items-center gap-2">
+      <header class="operation-progress-header flex items-start justify-between gap-3 p-4 border-b border-border/40">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
             <p class="truncate text-sm font-semibold text-foreground">{{ title }}</p>
-            <StateBadge :tone="resolvedTone" size="xs" shape="rounded">
-              {{ statusLabel }}
+            <StateBadge :tone="resolvedTone" size="xs" shape="rounded" class="shrink-0 max-w-[120px] truncate">
+              {{ shortStatusLabel }}
             </StateBadge>
           </div>
-          <p v-if="subtitle" class="mt-1 truncate text-xs text-muted-foreground">
-            {{ subtitle }}
+          <p v-if="detailedStatusText" class="mt-1 truncate text-xs text-muted-foreground" :title="detailedStatusText">
+            {{ detailedStatusText }}
           </p>
         </div>
 
-        <div class="flex shrink-0 items-center gap-2">
+        <div class="flex shrink-0 items-center gap-1.5 pt-0.5">
           <Button
             v-if="canCancel"
             size="xs"
             variant="outline"
-            root-class="min-w-14 justify-center text-amber-600 dark:text-amber-400"
+            root-class="min-w-12 justify-center text-amber-600 dark:text-amber-400"
             :disabled="cancelDisabled"
             @click="emit('cancel')"
           >
@@ -251,6 +251,27 @@ const progressValue = computed(() => {
   }
   if (!props.total) return props.busy ? 0 : 100
   return Math.min(100, Math.max(0, Math.round((props.current / props.total) * 100)))
+})
+
+const isLongStatus = computed(() => {
+  const text = String(props.statusLabel || '').trim()
+  return text.length > 6 || text.includes('：') || text.includes(':') || text.includes('第')
+})
+
+const shortStatusLabel = computed(() => {
+  if (props.error) return '失败'
+  const text = String(props.statusLabel || '').trim()
+  if (text === '已完成' || text === '完成') return '已完成'
+  if (text === '停止中') return '停止中'
+  if (isLongStatus.value) return props.busy ? '进行中' : '已就绪'
+  return text || (props.busy ? '进行中' : '已完成')
+})
+
+const detailedStatusText = computed(() => {
+  if (isLongStatus.value) {
+    return props.subtitle ? `${props.statusLabel} · ${props.subtitle}` : props.statusLabel
+  }
+  return props.subtitle || ''
 })
 
 const resolvedTone = computed<OperationProgressTone>(() => (props.error ? 'danger' : props.tone))

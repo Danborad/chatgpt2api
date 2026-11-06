@@ -84,7 +84,7 @@ def headless_login(
     password: str,
     two_factor_secret: str = "",
     proxy: str = "",
-    timeout_secs: float = 120.0,
+    timeout_secs: float = 180.0,
 ) -> dict:
     """调用 sentinel_solver 服务的无头浏览器自动执行登录与 2FA 认证换取完整凭据。"""
     base_url = config.sentinel_solver_url

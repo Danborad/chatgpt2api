@@ -1,6 +1,6 @@
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, type Ref } from 'vue'
 
-import { accountsApi, type AccountImportPayload, type AccountSourceType } from '@/api/accounts'
+import { accountsApi, type Account, type AccountImportPayload, type AccountSourceType } from '@/api/accounts'
 import {
   accountImportsApi,
   type RemoteAccountImportStarted,
@@ -39,6 +39,7 @@ export function isAccountImportMode(value: string): value is AccountImportMode {
 
 type AccountImportRuntimeOptions = {
   bulkProgress: ReturnType<typeof useAccountBulkProgressRuntime>
+  accounts?: Ref<Account[]>
   normalizeErrorMessage: (error: unknown) => string
   setError: (prefix: string, error: unknown, notify?: boolean) => void
   loadData: (options?: { silentErrorToast?: boolean }) => Promise<void>
@@ -306,7 +307,35 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
   const sessionJsonText = ref('')
   const password2faText = ref('')
   const password2faProxy = ref('')
-  const recognized2FACount = computed(() => parse2FAAccountLines(password2faText.value).length)
+  const filterExisting2FAAccounts = ref(true)
+
+  const allParsed2FAAccounts = computed(() => parse2FAAccountLines(password2faText.value))
+
+  const existingEmailSet = computed(() => {
+    const list = options.accounts?.value || []
+    return new Set(list.map((a) => (a.email || '').trim().toLowerCase()).filter(Boolean))
+  })
+
+  const effective2FAAccounts = computed(() => {
+    const all = allParsed2FAAccounts.value
+    if (!filterExisting2FAAccounts.value) return all
+    return all.filter((item) => !existingEmailSet.value.has(item.email.toLowerCase()))
+  })
+
+  const filteredExistingCount = computed(() => (
+    Math.max(0, allParsed2FAAccounts.value.length - effective2FAAccounts.value.length)
+  ))
+
+  const recognized2FACount = computed(() => effective2FAAccounts.value.length)
+
+  const recognizedSummaryText = computed(() => {
+    const totalParsed = allParsed2FAAccounts.value.length
+    if (totalParsed === 0) return '暂未识别到账号卡密（格式：账号----密码----2FA密钥）'
+    if (filterExisting2FAAccounts.value && filteredExistingCount.value > 0) {
+      return `已识别 ${totalParsed} 条（已过滤 ${filteredExistingCount.value} 个已有账号，待登录 ${effective2FAAccounts.value.length} 个）`
+    }
+    return `✓ 已识别 ${effective2FAAccounts.value.length} 个账号卡密`
+  })
   const toast = useToast()
   const confirmDialog = useConfirmDialog()
 
@@ -612,16 +641,24 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
         .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}`)
         .join('\n')
     } else {
-      text = password2faText.value.trim()
-      if (!text) {
+      const rawText = password2faText.value.trim()
+      if (!rawText) {
         toast.warning('请输入账号信息')
         return
       }
-      accounts = parse2FAAccountLines(text)
-      if (!accounts.length) {
+      const allParsed = allParsed2FAAccounts.value
+      if (!allParsed.length) {
         toast.warning('未检测到有效卡密格式（格式：账号----密码----2FA密钥）')
         return
       }
+      accounts = effective2FAAccounts.value
+      if (!accounts.length) {
+        toast.info(`检测到的 ${allParsed.length} 个账号均已在系统中正常存在，无需重复登录`)
+        return
+      }
+      text = accounts
+        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}`)
+        .join('\n')
     }
 
     importBusy.value = true
@@ -922,6 +959,9 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     sessionJsonText,
     password2faText,
     password2faProxy,
+    filterExisting2FAAccounts,
+    filteredExistingCount,
+    recognizedSummaryText,
     recognized2FACount,
     setImportMode,
     openImportModal,

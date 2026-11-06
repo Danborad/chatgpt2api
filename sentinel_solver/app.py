@@ -374,35 +374,38 @@ async def perform_headless_login(
 
         await page.locator(email_input_sel).first.fill(email)
         await page.wait_for_timeout(400)
-        await page.keyboard.press("Enter")
-        await page.wait_for_timeout(400)
+        try:
+            await page.locator(email_input_sel).first.press("Enter")
+        except Exception:
+            pass
 
-        # 提交邮箱，过滤 Google/Apple/手机/发送消息等非目标按钮
-        await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-            const submitBtn = btns.find(b => {
-                const t = (b.innerText || b.value || '').trim();
-                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github', '发送消息'];
-                if (bad.some(x => t.toLowerCase().includes(x))) return false;
-                if (b.getAttribute('aria-label') === '发送消息' || b.getAttribute('data-composer-submit') !== null) return false;
-                return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
-            });
-            if (submitBtn && submitBtn.offsetParent !== null) submitBtn.click();
-        }""")
+        # 辅助点击提交按钮，过滤非目标按钮，避免 Execution context destroyed
+        try:
+            submit_loc = page.locator('button:has-text("继续"), button:has-text("Continue"), button[type="submit"]')
+            cnt = await submit_loc.count()
+            for idx in range(cnt):
+                btn = submit_loc.nth(idx)
+                if await btn.is_visible():
+                    aria = (await btn.get_attribute("aria-label") or "").strip()
+                    if "发送消息" in aria:
+                        continue
+                    await btn.click(timeout=2000)
+                    break
+        except Exception:
+            pass
 
         # 等待密码输入框出现或错误提示
         password_input_sel = 'input[type="password"], input[name="password"], input[name="current-password"]'
         start_t = time.time()
-        while time.time() - start_t < 30:
+        while time.time() - start_t < 25:
             try:
                 if await page.locator(password_input_sel).count() > 0 and await page.locator(password_input_sel).first.is_visible():
                     break
-                err_text = await page.evaluate("""() => {
-                    const el = document.querySelector('[role="alert"], .error, .text-danger, [data-testid="error"]');
-                    return el ? el.innerText.trim() : '';
-                }""")
-                if err_text:
-                    raise RuntimeError(f"提交邮箱后提示错误: {err_text}")
+                err_loc = page.locator('[role="alert"], .error, .text-danger, [data-testid="error"], #error-element-password, .ulp-alert-error')
+                if await err_loc.count() > 0 and await err_loc.first.is_visible():
+                    err_msg = (await err_loc.first.text_content() or "").strip()
+                    if err_msg:
+                        raise RuntimeError(f"提交邮箱后提示错误: {err_msg}")
             except Exception as e:
                 if "提交邮箱后提示错误" in str(e):
                     raise
@@ -413,21 +416,25 @@ async def perform_headless_login(
 
         await page.locator(password_input_sel).first.fill(password)
         await page.wait_for_timeout(400)
-        await page.keyboard.press("Enter")
-        await page.wait_for_timeout(400)
+        try:
+            await page.locator(password_input_sel).first.press("Enter")
+        except Exception:
+            pass
 
-        # 提交密码
-        await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-            const submitBtn = btns.find(b => {
-                const t = (b.innerText || b.value || '').trim();
-                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github', '发送消息'];
-                if (bad.some(x => t.toLowerCase().includes(x))) return false;
-                if (b.getAttribute('aria-label') === '发送消息') return false;
-                return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
-            });
-            if (submitBtn && submitBtn.offsetParent !== null) submitBtn.click();
-        }""")
+        # 辅助提交密码
+        try:
+            submit_loc = page.locator('button[type="submit"], button:has-text("继续"), button:has-text("Continue"), button[name="action"][value="default"]')
+            cnt = await submit_loc.count()
+            for idx in range(cnt):
+                btn = submit_loc.nth(idx)
+                if await btn.is_visible():
+                    aria = (await btn.get_attribute("aria-label") or "").strip()
+                    if "发送消息" in aria:
+                        continue
+                    await btn.click(timeout=2000)
+                    break
+        except Exception:
+            pass
 
         # 等待 2FA 界面或直接进入 ChatGPT
         otp_sel = (
@@ -446,14 +453,13 @@ async def perform_headless_login(
                 if await page.locator(otp_sel).count() > 0 and await page.locator(otp_sel).first.is_visible():
                     mfa_needed = True
                     break
-                err_text = await page.evaluate("""() => {
-                    const el = document.querySelector('[role="alert"], .error, #error-element-password, [data-testid="error"]');
-                    return el ? el.innerText.trim() : '';
-                }""")
-                if err_text:
-                    raise RuntimeError(f"提交密码后提示错误: {err_text}")
+                err_loc = page.locator('[role="alert"], .error, #error-element-password, .ulp-alert-error, [data-testid="error"]')
+                if await err_loc.count() > 0 and await err_loc.first.is_visible():
+                    err_msg = (await err_loc.first.text_content() or "").strip()
+                    if err_msg:
+                        raise RuntimeError(f"密码错误或无法登录: {err_msg}")
             except Exception as e:
-                if "提交密码后提示错误" in str(e):
+                if "密码错误" in str(e):
                     raise
             await page.wait_for_timeout(800)
 
@@ -462,16 +468,18 @@ async def perform_headless_login(
             if not two_factor_secret:
                 raise RuntimeError("该账号已开启 2FA 双重认证，但未提供 2FA 密钥")
             totp = compute_totp(two_factor_secret)
-            await page.fill(otp_sel, totp)
+            await page.locator(otp_sel).first.fill(totp)
             await page.wait_for_timeout(400)
-            await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-                const submitBtn = btns.find(b => {
-                    const t = (b.innerText || b.value || '').trim();
-                    return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
-                });
-                if (submitBtn) submitBtn.click();
-            }""")
+            try:
+                await page.locator(otp_sel).first.press("Enter")
+            except Exception:
+                pass
+            try:
+                submit_loc = page.locator('button[type="submit"], button:has-text("继续"), button:has-text("Continue")')
+                if await submit_loc.count() > 0 and await submit_loc.first.is_visible():
+                    await submit_loc.first.click(timeout=3000)
+            except Exception:
+                pass
 
         # 等待重定向至 chatgpt.com
         start_t = time.time()

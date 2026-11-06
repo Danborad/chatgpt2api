@@ -633,10 +633,13 @@
                       />
                     </label>
 
-                    <div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
-                      <span :class="recognized2FACount > 0 ? 'text-emerald-600 font-medium' : 'text-muted-foreground'">
-                        {{ recognized2FACount > 0 ? `✓ 已识别 ${recognized2FACount} 个账号卡密` : '暂未识别到账号卡密（每行一条：账号----密码----2FA密钥）' }}
-                      </span>
+                    <div class="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <Checkbox v-model="filterExisting2FAAccounts">自动过滤系统中已登录的账号</Checkbox>
+                        <span :class="recognized2FACount > 0 ? 'text-emerald-600 font-medium' : 'text-muted-foreground'">
+                          {{ recognizedSummaryText }}
+                        </span>
+                      </div>
                       <Button
                         size="xs"
                         variant="primary"
@@ -913,6 +916,8 @@ const {
   sessionJsonText,
   password2faText,
   password2faProxy,
+  filterExisting2FAAccounts,
+  recognizedSummaryText,
   recognized2FACount,
   accountGroups,
   proxyGroups,
