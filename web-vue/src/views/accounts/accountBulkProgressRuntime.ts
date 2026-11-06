@@ -263,11 +263,11 @@ export function useAccountBulkProgressRuntime() {
   }
 
   function close() {
-    if (!refreshProgress.value?.done && batchBusy.value) return false
     if (pollTimer) {
       window.clearTimeout(pollTimer)
       pollTimer = null
     }
+    batchBusy.value = false
     showRefreshProgress.value = false
     activeProgressId.value = ''
     clearSession()
@@ -276,11 +276,13 @@ export function useAccountBulkProgressRuntime() {
 
   async function pollProgress(progressId: string, onFinished?: () => Promise<void> | void) {
     if (!progressId) return
+    let consecutiveErrors = 0
     const runPoll = async () => {
       try {
         const res = await apiClient.get<never, AccountOperationProgress>(
           `/api/accounts/operations/${encodeURIComponent(progressId)}`,
         )
+        consecutiveErrors = 0
         update(res)
         if (res.done || res.error) {
           finish(res)
@@ -288,8 +290,15 @@ export function useAccountBulkProgressRuntime() {
           void Promise.resolve(onFinished?.()).catch(() => {})
           return
         }
-      } catch {
-        // 网络短暂异常不中断，等待下一轮重试
+      } catch (err: any) {
+        consecutiveErrors += 1
+        const status = err?.response?.status
+        const msg = String(err?.message || err || '').toLowerCase()
+        if (status === 404 || msg.includes('404') || msg.includes('not found') || consecutiveErrors >= 3) {
+          end()
+          close()
+          return
+        }
       }
       if (showRefreshProgress.value && !refreshProgress.value?.done) {
         pollTimer = window.setTimeout(runPoll, 1000)
@@ -300,36 +309,47 @@ export function useAccountBulkProgressRuntime() {
 
   async function resumeSession(onFinished?: () => Promise<void> | void) {
     if (typeof window === 'undefined') return
-    if (showRefreshProgress.value && batchBusy.value) return
     try {
       const raw = window.localStorage.getItem(BULK_PROGRESS_STORAGE_KEY)
       if (!raw) return
       const session: BulkProgressSession = JSON.parse(raw)
-      if (!session || !session.title) return
-      // 超过 12 小时的任务自动清理
-      if (Date.now() - Number(session.updatedAt || 0) > 12 * 3600 * 1000) {
+      if (!session || !session.title || !session.progressId) {
         clearSession()
         return
       }
-      showRefreshProgress.value = true
-      minimized.value = Boolean(session.minimized)
-      refreshProgressTitle.value = session.title
-      refreshProgressKind.value = session.kind || 'import'
-      const total = Math.max(0, Number(session.total || 0))
-      refreshProgress.value = {
-        total,
-        processed: 0,
-        done: false,
-        error: null,
-        stage_label: '正在恢复后台任务状态...',
+      if (Date.now() - Number(session.updatedAt || 0) > 3600 * 1000) {
+        clearSession()
+        return
       }
-      if (session.progressId) {
+
+      // 预先探测后端任务是否存活
+      try {
+        const res = await apiClient.get<never, AccountOperationProgress>(
+          `/api/accounts/operations/${encodeURIComponent(session.progressId)}`,
+        )
+        showRefreshProgress.value = true
+        minimized.value = Boolean(session.minimized)
+        refreshProgressTitle.value = session.title
+        refreshProgressKind.value = session.kind || 'import'
         activeProgressId.value = session.progressId
+        update(res)
+        if (res.done || res.error) {
+          finish(res)
+          end()
+          void Promise.resolve(onFinished?.()).catch(() => {})
+          return
+        }
         batchBusy.value = true
         await pollProgress(session.progressId, onFinished)
+      } catch {
+        // 后端不存在此任务（404/失效），彻底清除本地遗留缓存，不阻塞界面
+        clearSession()
+        end()
+        showRefreshProgress.value = false
+        activeProgressId.value = ''
       }
     } catch {
-      // ignore
+      clearSession()
     }
   }
 

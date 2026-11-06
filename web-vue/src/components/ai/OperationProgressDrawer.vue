@@ -42,8 +42,7 @@
             @click="resolvedMinimized = true"
           />
           <CloseButton
-            :disabled="resolvedCloseDisabled"
-            :label="resolvedCloseDisabled ? '任务运行中，暂时无法关闭' : '关闭任务记录'"
+            label="关闭任务面板"
             @click="emit('close')"
           />
         </div>
