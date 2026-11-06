@@ -154,8 +154,8 @@ wheels = [
 
 [[package]]
 name = "chatgpt2api"
-version = "3.2.19"
-source = { virtual = "." }
+version = "3.2.20"
+source = { editable = "." }
 dependencies = [
     { name = "curl-cffi" },
     { name = "fastapi" },
