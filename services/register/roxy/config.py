@@ -178,8 +178,16 @@ def get_roxy_config_dict() -> dict:
 
 
 def pick_proxy() -> str:
-    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
-    return random.choice(ROXY_PROXY_POOL) if ROXY_PROXY_POOL else ""
+    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理），支持粘性代理池（如 Resin）注册一个自动切一个新出口 IP。"""
+    if not ROXY_PROXY_POOL:
+        return ""
+    base = random.choice(ROXY_PROXY_POOL)
+    try:
+        from services.proxy_service import derive_isolated_proxy
+        import uuid
+        return derive_isolated_proxy(base, f"reg_{uuid.uuid4().hex[:6]}")
+    except Exception:
+        return base
 
 
 # 兼容入口：默认每次进程启动随机选一个，作为本次注册全程的固定代理

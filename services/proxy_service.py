@@ -1142,4 +1142,48 @@ def test_clearance(target_url: str = "https://chatgpt.com") -> dict:
     }
 
 
+def derive_isolated_proxy(proxy_url: str, identity: str = "") -> str:
+    """针对粘性代理池（如 Resin、动态住宅代理、Luminati），为每个账号/任务派生独立隔离的代理出口。
+
+    例如：
+    - 输入: http://user@proxy-pool.local:8080
+    - 派生: http://user.wax_county_0a217@proxy-pool.local:8080
+    Resin 会将每个不同的 username 后缀识别为一个独立的会话/租约，并从节点池中分配一个全新的干净出口 IP。
+    同时，该账号在登录的整个会话过程中始终保持使用该出口 IP，保障会话粘性。
+    """
+    if not proxy_url or not proxy_url.strip():
+        return ""
+    url = proxy_url.strip()
+    try:
+        from urllib.parse import urlparse, urlunparse
+        import uuid
+        parsed = urlparse(url)
+        if not parsed.hostname or not parsed.username:
+            return url
+
+        clean_id = re.sub(r'[^a-zA-Z0-9_]', '', identity.split('@')[0]) if identity else ""
+        if not clean_id:
+            clean_id = uuid.uuid4().hex[:8]
+        else:
+            clean_id = clean_id[:16]
+
+        username = parsed.username
+        password = parsed.password
+
+        # 若已经是 user.session 格式，则替换后缀；否则追加 .clean_id
+        if "." in username:
+            base_user = username.split(".")[0]
+            new_username = f"{base_user}.{clean_id}"
+        else:
+            new_username = f"{username}.{clean_id}"
+
+        netloc_auth = f"{new_username}:{password}" if password else new_username
+        port_part = f":{parsed.port}" if parsed.port else ""
+        new_netloc = f"{netloc_auth}@{parsed.hostname}{port_part}"
+        return urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    except Exception:
+        return url
+
+
+
 proxy_settings = ProxySettingsStore()

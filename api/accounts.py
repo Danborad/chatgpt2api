@@ -2425,7 +2425,7 @@ def create_router() -> APIRouter:
 
         async def _do_login_2fa() -> None:
             from services.sentinel_solver_client import headless_login
-            from services.proxy_service import proxy_settings
+            from services.proxy_service import proxy_settings, derive_isolated_proxy
             added = 0
             updated_ids: list[str] = []
             errors: list[str] = []
@@ -2451,13 +2451,15 @@ def create_router() -> APIRouter:
                         "login_2fa",
                         f"正在登录第 {idx + 1}/{total} 个账号: {email}",
                     )
+                    # 动态派生隔离的粘性代理（实现登录一个账号自动切一个独立出口 IP，且同一账号保持会话粘性）
+                    account_proxy = derive_isolated_proxy(proxy_to_use, email)
                     try:
                         acc_payload = await run_in_threadpool(
                             headless_login,
                             email=email,
                             password=pwd,
                             two_factor_secret=secret,
-                            proxy=proxy_to_use,
+                            proxy=account_proxy,
                             timeout_secs=180.0,
                         )
                         if target_group_id is not None:
