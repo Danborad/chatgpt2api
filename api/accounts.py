@@ -1023,6 +1023,7 @@ def _account_operation_progress_for_api(
             "total",
             "processed",
             "done",
+            "stopped",
             "stage",
             "stage_label",
             "status_counts",
@@ -1984,6 +1985,15 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return await get_account_operation_progress(progress_id)
 
+    @router.post("/api/accounts/operations/{progress_id}/stop")
+    async def stop_canonical_account_operation(
+        progress_id: str,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        stopped = account_service.stop_refresh_progress(progress_id)
+        return {"stopped": stopped}
+
     @router.get("/api/accounts/refresh/progress/{progress_id}")
     async def get_legacy_account_refresh_progress(
         progress_id: str,
@@ -2406,6 +2416,13 @@ def create_router() -> APIRouter:
 
             try:
                 for idx, item in enumerate(items):
+                    if account_service.is_refresh_progress_stopped(progress_id):
+                        account_service.update_refresh_progress_stage(
+                            progress_id,
+                            "completed",
+                            "任务已由用户手动停止",
+                        )
+                        break
                     email = item["email"]
                     pwd = item["password"]
                     secret = item["two_factor_secret"]

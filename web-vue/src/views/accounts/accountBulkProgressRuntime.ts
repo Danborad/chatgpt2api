@@ -171,7 +171,7 @@ export function useAccountBulkProgressRuntime() {
     backendEventKeys.clear()
     operationEvents.value = []
     bulkStopRequested.value = false
-    bulkStopEnabled.value = Boolean(options.stoppable)
+    bulkStopEnabled.value = options.stoppable !== undefined ? Boolean(options.stoppable) : true
     batchBusy.value = true
     showRefreshProgress.value = true
     minimized.value = false
@@ -248,9 +248,17 @@ export function useAccountBulkProgressRuntime() {
     saveSession()
   }
 
-  function requestStop() {
+  async function requestStop() {
     if (!canStopRefreshProgress.value) return false
     bulkStopRequested.value = true
+    const pid = activeProgressId.value
+    if (pid) {
+      try {
+        await apiClient.post(`/api/accounts/operations/${encodeURIComponent(pid)}/stop`, {})
+      } catch {
+        // ignore
+      }
+    }
     return true
   }
 

@@ -628,7 +628,7 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     showImportModal.value = false
     const total = accounts.length
     const taskTitle = isRetry ? `重试卡密 / 2FA 登录授权 (${total})` : '卡密 / 2FA 登录授权'
-    await options.bulkProgress.start(taskTitle, total, 'import')
+    await options.bulkProgress.start(taskTitle, total, 'import', { stoppable: true })
     options.bulkProgress.update({
       total,
       processed: 0,

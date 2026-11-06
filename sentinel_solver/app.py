@@ -313,46 +313,87 @@ async def perform_headless_login(
             context_kwargs["proxy"] = {"server": proxy_server}
 
         context = await login_browser.new_context(**context_kwargs)
+        await context.add_init_script(BASE_INIT_SCRIPT)
+        if VM_SCRIPT:
+            await context.add_init_script(VM_SCRIPT)
         await Stealth().apply_stealth_async(context)
         page = await context.new_page()
 
+        # 优先打开首页，建立正常的会话并点击登录
         try:
-            await page.goto("https://chatgpt.com/auth/login", wait_until="domcontentloaded", timeout=40000)
+            await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=40000)
+            await page.wait_for_timeout(2000)
         except Exception:
             pass
-        await page.wait_for_timeout(2000)
 
         email_input_sel = (
-            'input[type="email"], input[name="username"], input[name="email"], '
-            'input[autocomplete="email"], input#email-input'
+            'input[type="email"], input#mobile-auth-email, input[name="login_hint"], '
+            'input[name="username"], input[name="email"], input[autocomplete="email"], input#email-input'
         )
-        try:
-            await page.wait_for_selector(email_input_sel, state="visible", timeout=25000)
-        except Exception:
+
+        start_wait = time.time()
+        while time.time() - start_wait < 30:
+            if await page.locator(email_input_sel).count() > 0 and await page.locator(email_input_sel).first.is_visible():
+                break
+
+            # 寻找主页上的登录按钮并点击
+            login_btn = page.locator('button:has-text("Log in"), button:has-text("登录"), [data-testid="login-button"], a:has-text("Log in"), a:has-text("登录")')
+            if await login_btn.count() > 0 and await login_btn.first.is_visible():
+                try:
+                    await login_btn.first.click()
+                    await page.wait_for_timeout(2000)
+                    if await page.locator(email_input_sel).count() > 0 and await page.locator(email_input_sel).first.is_visible():
+                        break
+                except Exception:
+                    pass
+
+            # 如果卡在 challenge 界面，尝试寻找 Turnstile iframe 点击
             title = await page.title()
-            if any(m in title for m in CHALLENGE_TITLES):
+            if any(m in title for m in CHALLENGE_TITLES) or "cf_chl" in page.url:
+                try:
+                    cf_frame = page.frame_locator('iframe[src*="cloudflare.com"]')
+                    cf_btn = cf_frame.locator('input[type="checkbox"], #challenge-stage')
+                    if await cf_btn.count() > 0:
+                        await cf_btn.first.click()
+                except Exception:
+                    pass
+
+            if time.time() - start_wait > 10 and "/auth" not in page.url:
+                try:
+                    await page.goto("https://chatgpt.com/auth/login", wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+
+            await page.wait_for_timeout(1000)
+
+        if not (await page.locator(email_input_sel).count() > 0 and await page.locator(email_input_sel).first.is_visible()):
+            title = await page.title()
+            if any(m in title for m in CHALLENGE_TITLES) or "cf_chl" in page.url:
                 raise RuntimeError("登录页被 Cloudflare 质询拦截，请检查代理节点是否干净")
             raise RuntimeError(f"未找到邮箱输入框，当前页面: {page.url} (title={title})")
 
-        await page.fill(email_input_sel, email)
+        await page.locator(email_input_sel).first.fill(email)
+        await page.wait_for_timeout(400)
+        await page.keyboard.press("Enter")
         await page.wait_for_timeout(400)
 
-        # 提交邮箱，过滤 Google/Apple/手机等第三方入口
+        # 提交邮箱，过滤 Google/Apple/手机/发送消息等非目标按钮
         await page.evaluate("""() => {
             const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
             const submitBtn = btns.find(b => {
                 const t = (b.innerText || b.value || '').trim();
-                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github'];
+                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github', '发送消息'];
                 if (bad.some(x => t.toLowerCase().includes(x))) return false;
+                if (b.getAttribute('aria-label') === '发送消息' || b.getAttribute('data-composer-submit') !== null) return false;
                 return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
             });
-            if (submitBtn) submitBtn.click();
+            if (submitBtn && submitBtn.offsetParent !== null) submitBtn.click();
         }""")
 
         # 等待密码输入框出现或错误提示
         password_input_sel = 'input[type="password"], input[name="password"], input[name="current-password"]'
         start_t = time.time()
-        while time.time() - start_t < 25:
+        while time.time() - start_t < 30:
             try:
                 if await page.locator(password_input_sel).count() > 0 and await page.locator(password_input_sel).first.is_visible():
                     break
@@ -367,7 +408,12 @@ async def perform_headless_login(
                     raise
             await page.wait_for_timeout(800)
 
-        await page.fill(password_input_sel, password)
+        if not (await page.locator(password_input_sel).count() > 0 and await page.locator(password_input_sel).first.is_visible()):
+            raise RuntimeError(f"未找到密码输入框，当前页面: {page.url} (title={await page.title()})")
+
+        await page.locator(password_input_sel).first.fill(password)
+        await page.wait_for_timeout(400)
+        await page.keyboard.press("Enter")
         await page.wait_for_timeout(400)
 
         # 提交密码
@@ -375,11 +421,12 @@ async def perform_headless_login(
             const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
             const submitBtn = btns.find(b => {
                 const t = (b.innerText || b.value || '').trim();
-                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github'];
+                const bad = ['google', 'apple', 'microsoft', 'phone', '手机', 'github', '发送消息'];
                 if (bad.some(x => t.toLowerCase().includes(x))) return false;
+                if (b.getAttribute('aria-label') === '发送消息') return false;
                 return t === '继续' || t.toLowerCase() === 'continue' || b.type === 'submit';
             });
-            if (submitBtn) submitBtn.click();
+            if (submitBtn && submitBtn.offsetParent !== null) submitBtn.click();
         }""")
 
         # 等待 2FA 界面或直接进入 ChatGPT

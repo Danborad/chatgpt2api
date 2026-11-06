@@ -63,7 +63,7 @@
         </div>
 
         <div
-          v-if="canRetry && !busy"
+          v-if="canRetry"
           class="operation-progress-retry-bar mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3.5 py-2.5 text-xs"
         >
           <div class="flex min-w-0 items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
@@ -84,6 +84,8 @@
               size="xs"
               variant="primary"
               root-class="border-transparent bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+              :disabled="busy"
+              :title="busy ? '请先等待任务完成或点击右上角停止后再重试' : ''"
               @click="emit('retry')"
             >
               {{ retryLabel || '重试失败账号' }}

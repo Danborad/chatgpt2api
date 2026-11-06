@@ -335,6 +335,10 @@ export function useAccountsPage() {
       toast.warning('暂无失败账号可供重试')
       return
     }
+    if (batchBusy.value) {
+      await bulkProgress.requestStop()
+      await new Promise((resolve) => window.setTimeout(resolve, 800))
+    }
     await accountImport.importPassword2faAccounts(failedItems)
   }
 

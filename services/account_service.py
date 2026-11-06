@@ -4417,6 +4417,7 @@ class AccountService:
                 "total": total,
                 "processed": 0,
                 "done": False,
+                "stopped": False,
                 "error": None,
                 "status_counts": {"正常": 0, "限流": 0, "异常": 0, "禁用": 0},
                 "total_quota": 0,
@@ -4585,6 +4586,24 @@ class AccountService:
             if failed_items is not None:
                 progress["failed_items"] = failed_items
             progress["_updated_at_monotonic"] = now
+
+    def stop_refresh_progress(self, progress_id: str) -> bool:
+        """标记任务已被请求中止。"""
+        now = time.monotonic()
+        with self._refresh_progress_lock:
+            self._prune_refresh_progress_locked(now, target_id=progress_id)
+            progress = self._refresh_progress.get(progress_id)
+            if progress is None or progress.get("done"):
+                return False
+            progress["stopped"] = True
+            progress["_updated_at_monotonic"] = now
+            return True
+
+    def is_refresh_progress_stopped(self, progress_id: str) -> bool:
+        """查询任务是否已被请求中止。"""
+        with self._refresh_progress_lock:
+            progress = self._refresh_progress.get(progress_id)
+            return bool(progress and progress.get("stopped"))
 
     def get_refresh_progress(self, progress_id: str) -> dict | None:
         """查询刷新进度。"""
