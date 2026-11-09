@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title ChatGPT2API Windows 桌面原生登录助手
+title ChatGPT2API Windows 桌面原生批量登录助手
 
 echo =======================================================
-echo          ChatGPT2API Windows 桌面原生登录助手
+echo          ChatGPT2API Windows 桌面原生批量登录助手
 echo =======================================================
 echo.
 
@@ -20,17 +20,16 @@ if %errorlevel% neq 0 (
 )
 
 :: 安装依赖库
-echo 正在检查并安装 Python 运行依赖库 (requests, playwright, rich)...
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+echo 正在检查并更新运行依赖库 (playwright, requests, rich)...
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [警告] 清华镜像源安装失败，尝试官方源重试...
     pip install -r requirements.txt
 )
 
 echo.
-echo 依赖环境准备就绪，正在启动登录助手...
+echo 依赖环境准备就绪，正在启动桌面图形界面 (GUI)...
 echo.
 
-python main.py
+start "" pythonw gui.py
 
-pause
+exit

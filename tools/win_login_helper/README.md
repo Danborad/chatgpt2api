@@ -109,9 +109,21 @@ user2@icloud.com----Password456----P26TUU4ATP42WRYU2EVBI3JQ3ELASZRH
 user3@icloud.com----Password789
 ```
 
-### 步骤 5：一键运行
-直接双击运行 **`run.bat`** 即可！
-脚本会自动安装依赖库，检查服务器连通性，自动排重，并逐一拉起无痕浏览器执行登录与入库。
+### 步骤 5：一键运行与打包
+
+#### 方式 A：直接运行图形界面（GUI，推荐）
+- 直接双击运行 **`run.bat`**；
+- 脚本会自动检测依赖并拉起**桌面图形界面（GUI）**；
+- 在界面中直接查看服务器状态、粘贴卡密、点击【开始批量登录授权】、实时表格展示登录进度与报错信息。
+
+#### 方式 B：一键打包为独立的 Windows `.exe` 可执行程序
+- 直接双击运行 **`build_exe.bat`**；
+- 脚本会自动调用 PyInstaller 完成编译，在 `dist\ChatGPT2API-LoginHelper\` 目录下生成：
+  `ChatGPT2API-LoginHelper.exe`；
+- 生成后的文件夹可以随意拷贝到其他电脑，完全脱离 Python 环境双击直接运行！
+
+#### 方式 C：控制台命令行运行
+- 双击运行 **`run_cli.bat`** 或在终端执行 `python main.py`，适合习惯黑底白字控制台的用户。
 
 ---
 
