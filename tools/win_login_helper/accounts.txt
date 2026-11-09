@@ -1,0 +1,7 @@
+# 在此粘贴待登录的账号卡密，支持单行格式与多行格式（# 开头的行为注释）
+# 格式一（推荐标准单行）：账号----密码----2FA密钥
+# 格式二（无2FA普通账号）：账号----密码
+# 
+# 示例：
+# demo_user1@example.com----Password123----JBSWY3DPEHPK3PXP
+# demo_user2@example.com----Password456----JBSWY3DPEHPK3PXP

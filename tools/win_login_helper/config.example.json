@@ -1,0 +1,23 @@
+{
+  "servers": [
+    {
+      "name": "本地节点",
+      "url": "http://127.0.0.1:3005",
+      "auth_key": "your_admin_auth_key",
+      "enabled": true,
+      "target_group_id": null
+    }
+  ],
+  "import_strategy": "round_robin",
+  "target_server": "本地节点",
+  "base_proxy": "http://user@proxy-pool.local:2260",
+  "browser": {
+    "channel": "msedge",
+    "headless": false,
+    "timeout_seconds": 90,
+    "slow_mo_ms": 100
+  },
+  "max_retries": 2,
+  "accounts_file": "accounts.txt",
+  "failed_file": "failed_accounts.txt"
+}

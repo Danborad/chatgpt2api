@@ -1,0 +1,4 @@
+# ChatGPT2API Windows 登录助手依赖清单
+playwright>=1.40.0
+requests>=2.28.0
+rich>=13.0.0

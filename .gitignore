@@ -33,6 +33,7 @@ git_cache/
 .codegraph-*/
 
 # 调试/测试输出目录
+tools/*.zip
 .codex/run-logs/
 .codex_tmp/
 .playwright-mcp/
