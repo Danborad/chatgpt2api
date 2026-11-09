@@ -43,12 +43,12 @@ def load_config() -> dict:
         else:
             return {
                 "servers": [
-                    {"name": "NAS主节点", "url": "http://192.168.31.61:3005", "auth_key": "onepiece1314", "enabled": True, "target_group_id": None}
+                    {"name": "本地节点", "url": "http://127.0.0.1:3005", "auth_key": "your_auth_key", "enabled": True, "target_group_id": None}
                 ],
                 "import_strategy": "round_robin",
-                "target_server": "NAS主节点",
-                "base_proxy": "http://nohk@192.168.31.46:2260",
-                "browser": {"channel": "msedge", "headless": false, "timeout_seconds": 90, "slow_mo_ms": 50},
+                "target_server": "本地节点",
+                "base_proxy": "http://user@proxy-pool.local:2260",
+                "browser": {"channel": "msedge", "headless": False, "timeout_seconds": 90, "slow_mo_ms": 50},
                 "max_retries": 2,
             }
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -266,17 +266,17 @@ class LoginHelperGUI(tk.Tk):
         f_row1 = ttk.Frame(form_frame)
         f_row1.pack(fill=tk.X, pady=2)
         ttk.Label(f_row1, text="节点名称:", width=10).pack(side=tk.LEFT)
-        self.var_srv_name = tk.StringVar(value="NAS主节点")
+        self.var_srv_name = tk.StringVar(value="本地节点")
         ttk.Entry(f_row1, textvariable=self.var_srv_name, width=20).pack(side=tk.LEFT, padx=5)
 
         ttk.Label(f_row1, text="服务地址:", width=10).pack(side=tk.LEFT, padx=(10, 0))
-        self.var_srv_url = tk.StringVar(value="http://192.168.31.61:3005")
+        self.var_srv_url = tk.StringVar(value="http://127.0.0.1:3005")
         ttk.Entry(f_row1, textvariable=self.var_srv_url, width=35).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
         f_row2 = ttk.Frame(form_frame)
         f_row2.pack(fill=tk.X, pady=2)
         ttk.Label(f_row2, text="管理员密钥:", width=10).pack(side=tk.LEFT)
-        self.var_srv_key = tk.StringVar(value="onepiece1314")
+        self.var_srv_key = tk.StringVar(value="your_auth_key")
         ttk.Entry(f_row2, textvariable=self.var_srv_key, width=35).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
         self.var_srv_enabled = tk.BooleanVar(value=True)
@@ -290,7 +290,7 @@ class LoginHelperGUI(tk.Tk):
     def _load_config_to_ui(self) -> None:
         cfg = self.config_data
         self.var_strategy.set(cfg.get("import_strategy", "round_robin"))
-        self.var_proxy.set(cfg.get("base_proxy", "http://nohk@192.168.31.46:2260"))
+        self.var_proxy.set(cfg.get("base_proxy", ""))
         b_cfg = cfg.get("browser", {})
         self.var_channel.set(b_cfg.get("channel", "msedge"))
         self.var_headless.set(bool(b_cfg.get("headless", False)))
