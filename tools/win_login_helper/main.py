@@ -165,6 +165,24 @@ async def main() -> None:
             console.print(f"[bold cyan][{idx}/{len(pending_accounts)}] 正在处理账号:[/bold cyan] [yellow]{email}[/yellow]")
             console.print(f"  分发目标服务器: [blue]{target_server.name}[/blue] ({target_server.base_url})")
 
+            # 若卡密中自带 Access Token (JWT)，优先直接入库（免开浏览器，0秒极速完成）
+            if item.get("access_token"):
+                console.print("  [dim]检测到卡密自带 Access Token，正在尝试免开浏览器极速直连入库...[/dim]")
+                direct_payload = {
+                    "email": email,
+                    "password": pwd,
+                    "two_factor_secret": secret,
+                    "access_token": item["access_token"],
+                    "source_type": "web",
+                    "registration_engine": "card_at_direct",
+                }
+                ok, push_msg = target_server.push_account(direct_payload)
+                if ok:
+                    console.print(f"  [bold green]★ 自带 AT 极速入库成功: {push_msg} (0 秒)[/bold green]")
+                    success_count += 1
+                    continue
+                console.print(f"  [yellow]自带 AT 入库未通过 ({push_msg})，自动降级启动浏览器重新登录换取新 Token...[/yellow]")
+
             logged_payload = None
             last_err = ""
 

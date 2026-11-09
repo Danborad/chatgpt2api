@@ -525,6 +525,29 @@ class LoginHelperGUI(tk.Tk):
                 target_server = dispatcher.pick_next_server()
                 iid = item["id"]
 
+                # 若卡密自带 Access Token，优先免开浏览器极速直连入库
+                if item.get("access_token"):
+                    self.ui_queue.put(("table_update", (iid, "极速入库", "检测到自带有效 AT，免开浏览器上传中...")))
+                    self._log(f"[{idx}/{len(pending_list)}] {email} -> 目标: [{target_server.name}] (检测到自带 AT，免开浏览器极速入库...)")
+                    direct_payload = {
+                        "email": email,
+                        "password": pwd,
+                        "two_factor_secret": secret,
+                        "access_token": item["access_token"],
+                        "source_type": "web",
+                        "registration_engine": "card_at_direct",
+                    }
+                    ok, push_msg = target_server.push_account(direct_payload)
+                    if ok:
+                        self._log(f"  ✓ 自带 AT 极速入库成功 (0 秒) -> [{target_server.name}]")
+                        self.ui_queue.put(("table_update", (iid, "✓ 成功", "自带 AT 极速入库成功 (0 秒)")))
+                        success_count += 1
+                        self.ui_queue.put(("progress", (len(pending_list), idx, success_count, failed_count)))
+                        await asyncio.sleep(0.1)
+                        continue
+                    else:
+                        self._log(f"  [提示] 自带 AT 入库未通过 ({push_msg})，自动降级拉起浏览器重新登录授权...")
+
                 self.ui_queue.put(("table_update", (iid, "登录中", f"正在使用 {browser_cfg.get('channel', 'msedge')} 登录...")))
                 self._log(f"[{idx}/{len(pending_list)}] 正在登录: {email} -> 目标服务器: [{target_server.name}]")
 

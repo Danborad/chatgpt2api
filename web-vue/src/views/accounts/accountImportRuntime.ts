@@ -60,14 +60,15 @@ function parseTokenLines(text: string) {
   )
 }
 
-export function parse2FAAccountLines(text: string): Array<{ email: string; password: string; two_factor_secret?: string }> {
+export function parse2FAAccountLines(text: string): Array<{ email: string; password: string; two_factor_secret?: string; access_token?: string }> {
   if (!text || !text.trim()) return []
 
-  const results: Array<{ email: string; password: string; two_factor_secret?: string }> = []
+  const results: Array<{ email: string; password: string; two_factor_secret?: string; access_token?: string }> = []
   const emailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}/g
   const singleEmailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}/
   const otpauthRegex = /otpauth:\/\/[^\s"']+?[?&]secret=([a-zA-Z2-7=]+)/i
   const base32TokenRegex = /^[A-Za-z2-7]{16,64}={0,6}$/
+  const jwtRegex = /\b(eyJ[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+){2})\b/
 
   const rawLines = text.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
 
@@ -120,7 +121,15 @@ export function parse2FAAccountLines(text: string): Array<{ email: string; passw
 
     // 单行模式智能解析
     let twoFa = ''
+    let accessToken = ''
     let lineToParse = line
+
+    // 0. 优先提取 Access Token (JWT 格式: eyJ... . eyJ... . ...)
+    const jwtMatch = lineToParse.match(jwtRegex)
+    if (jwtMatch) {
+      accessToken = jwtMatch[1].trim()
+      lineToParse = `${lineToParse.slice(0, jwtMatch.index)} ${lineToParse.slice(jwtMatch.index! + jwtMatch[0].length)}`.trim()
+    }
 
     // 1. 优先提取 otpauth://
     const otpMatch = lineToParse.match(otpauthRegex)
@@ -161,7 +170,7 @@ export function parse2FAAccountLines(text: string): Array<{ email: string; passw
         const b32Match = afterEmail.match(/\b([A-Za-z2-7]{16,64})\b/)
         if (b32Match) twoFa = b32Match[1].toUpperCase()
       }
-      results.push({ email, password, two_factor_secret: twoFa })
+      results.push({ email, password, two_factor_secret: twoFa, access_token: accessToken || undefined })
       i++
       continue
     }
@@ -170,7 +179,7 @@ export function parse2FAAccountLines(text: string): Array<{ email: string; passw
     const sepPattern = /\s*(?:----+|---+|--+|[|:,]|\t+)\s*/
     let parts = afterEmail.split(sepPattern).map((p) => p.trim()).filter(Boolean)
     if (parts.length <= 1) {
-      parts = afterEmail.split(/\s+/).map((p) => p.trim()).filter(Boolean)
+      parts = afterEmail.split(/\\s+/).map((p) => p.trim()).filter(Boolean)
     }
 
     const cleanParts: string[] = []
@@ -198,7 +207,7 @@ export function parse2FAAccountLines(text: string): Array<{ email: string; passw
     }
 
     if (email && password) {
-      results.push({ email, password, two_factor_secret: twoFa })
+      results.push({ email, password, two_factor_secret: twoFa, access_token: accessToken || undefined })
     }
     i++
   }
@@ -629,16 +638,16 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
   }
 
   async function importPassword2faAccounts(
-    retryItems?: Array<{ email: string; password: string; two_factor_secret?: string }>,
+    retryItems?: Array<{ email: string; password: string; two_factor_secret?: string; access_token?: string }>,
   ) {
     const isRetry = Array.isArray(retryItems) && retryItems.length > 0
     let text = ''
-    let accounts: Array<{ email: string; password: string; two_factor_secret?: string }> = []
+    let accounts: Array<{ email: string; password: string; two_factor_secret?: string; access_token?: string }> = []
 
     if (isRetry) {
       accounts = retryItems
       text = retryItems
-        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}`)
+        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}${a.access_token ? `----${a.access_token}` : ''}`)
         .join('\n')
     } else {
       const rawText = password2faText.value.trim()
@@ -657,7 +666,7 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
         return
       }
       text = accounts
-        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}`)
+        .map((a) => `${a.email}----${a.password}----${a.two_factor_secret || ''}${a.access_token ? `----${a.access_token}` : ''}`)
         .join('\n')
     }
 

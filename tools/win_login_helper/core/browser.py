@@ -88,11 +88,20 @@ def parse_card_key_accounts(text: str) -> list[dict[str, str]]:
 
         # 单行模式解析
         two_fa = ""
-        otp_m = otpauth_re.search(line)
+        access_token = ""
+
+        # 0. 优先提取 Access Token (JWT 格式: eyJ... . eyJ... . ...)
+        jwt_m = re.search(r"\b(eyJ[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+){2})\b", line)
         line_clean = line
+        if jwt_m:
+            access_token = jwt_m.group(1).strip()
+            line_clean = f"{line[: jwt_m.start()]} {line[jwt_m.end() :]}".strip()
+
+        # 1. 优先提取 otpauth://
+        otp_m = otpauth_re.search(line_clean)
         if otp_m:
             two_fa = otp_m.group(1).strip().upper()
-            line_clean = line[: otp_m.start()] + " " + line[otp_m.end() :]
+            line_clean = f"{line_clean[: otp_m.start()]} {line_clean[otp_m.end() :]}".strip()
 
         line_clean = re.sub(r"\(.*?\)|（.*?）", "", line_clean).strip()
 
@@ -118,7 +127,10 @@ def parse_card_key_accounts(text: str) -> list[dict[str, str]]:
                 b32_match = re.search(r"\b([A-Za-z2-7]{16,64})\b", after_email)
                 if b32_match:
                     two_fa = b32_match.group(1).upper()
-            results.append({"email": email, "password": password, "two_factor_secret": two_fa})
+            res_item = {"email": email, "password": password, "two_factor_secret": two_fa}
+            if access_token:
+                res_item["access_token"] = access_token
+            results.append(res_item)
             i += 1
             continue
 
@@ -148,11 +160,14 @@ def parse_card_key_accounts(text: str) -> list[dict[str, str]]:
                     two_fa = clean_parts[1].replace(" ", "").upper()
 
         if email and password:
-            results.append({
+            res_item = {
                 "email": email,
                 "password": password,
                 "two_factor_secret": two_fa,
-            })
+            }
+            if access_token:
+                res_item["access_token"] = access_token
+            results.append(res_item)
         i += 1
 
     return results

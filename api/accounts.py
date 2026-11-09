@@ -282,12 +282,20 @@ def _smart_parse_2fa_accounts(text: str) -> list[dict[str, str]]:
 
         # 单行模式解析
         two_fa = ""
-        # 1. 优先提取 otpauth://
-        otp_m = otpauth_re.search(line)
+        access_token = ""
+
+        # 0. 优先提取 Access Token (JWT 格式: eyJ... . eyJ... . ...)
+        jwt_m = re.search(r'\b(eyJ[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+){2})\b', line)
         line_clean = line
+        if jwt_m:
+            access_token = jwt_m.group(1).strip()
+            line_clean = f"{line[:jwt_m.start()]} {line[jwt_m.end():]}".strip()
+
+        # 1. 优先提取 otpauth://
+        otp_m = otpauth_re.search(line_clean)
         if otp_m:
             two_fa = otp_m.group(1).strip().upper()
-            line_clean = line[:otp_m.start()] + " " + line[otp_m.end():]
+            line_clean = f"{line_clean[:otp_m.start()]} {line_clean[otp_m.end():]}".strip()
 
         # 2. 剥离中文括号备注，如 "(2fa码，获取地址2fa.run)"
         line_clean = re.sub(r'\(.*?\)|（.*?）', '', line_clean).strip()
@@ -304,16 +312,14 @@ def _smart_parse_2fa_accounts(text: str) -> list[dict[str, str]]:
             twofa_label_m = re.search(r'(?:2fa|密钥|secret|key|totp|验证码)[:：\s]+([A-Za-z2-7]{16,64})', after_email, re.IGNORECASE)
             if twofa_label_m:
                 two_fa = twofa_label_m.group(1).strip().upper()
-                after_email = after_email[:twofa_label_m.start()] + " " + after_email[twofa_label_m.end():]
-                after_email = after_email.strip()
+                after_email = f"{after_email[:twofa_label_m.start()]} {after_email[twofa_label_m.end():]}".strip()
 
         # 5. 显式密码标签提取：密码: xxx / password: xxx
         password = ""
         pwd_label_m = re.search(r'(?:密码|password|pwd|pass)[:：\s]+([^\s]+)', after_email, re.IGNORECASE)
         if pwd_label_m:
             password = pwd_label_m.group(1).strip()
-            after_email = after_email[:pwd_label_m.start()] + " " + after_email[pwd_label_m.end():]
-            after_email = after_email.strip()
+            after_email = f"{after_email[:pwd_label_m.start()]} {after_email[pwd_label_m.end():]}".strip()
 
         # 剥离前导多余分隔符
         after_email = re.sub(r'^[\s\-_|:,]+', '', after_email).strip()
@@ -323,7 +329,10 @@ def _smart_parse_2fa_accounts(text: str) -> list[dict[str, str]]:
                 b32_match = re.search(r'\b([A-Za-z2-7]{16,64})\b', after_email)
                 if b32_match:
                     two_fa = b32_match.group(1).upper()
-            results.append({"email": email, "password": password, "two_factor_secret": two_fa})
+            res_item = {"email": email, "password": password, "two_factor_secret": two_fa}
+            if access_token:
+                res_item["access_token"] = access_token
+            results.append(res_item)
             i += 1
             continue
 
@@ -354,11 +363,14 @@ def _smart_parse_2fa_accounts(text: str) -> list[dict[str, str]]:
                     two_fa = clean_parts[1].replace(" ", "").upper()
 
         if email and password:
-            results.append({
+            res_item = {
                 "email": email,
                 "password": password,
                 "two_factor_secret": two_fa,
-            })
+            }
+            if access_token:
+                res_item["access_token"] = access_token
+            results.append(res_item)
         i += 1
 
     return results
@@ -2451,6 +2463,46 @@ def create_router() -> APIRouter:
                         "login_2fa",
                         f"正在登录第 {idx + 1}/{total} 个账号: {email}",
                     )
+                    # 若卡密中自带有效 Access Token (JWT)，优先直接入库（免开浏览器，0秒极速完成）
+                    direct_at = str(item.get("access_token") or "").strip()
+                    if direct_at:
+                        try:
+                            acc_payload = {
+                                "email": email,
+                                "password": pwd,
+                                "two_factor_secret": secret,
+                                "access_token": direct_at,
+                                "source_type": "web",
+                                "registration_engine": "card_at_direct",
+                            }
+                            if target_group_id is not None:
+                                acc_payload["group_id"] = target_group_id
+
+                            await run_in_threadpool(account_service.add_account_items, [acc_payload], False)
+                            try:
+                                await run_in_threadpool(account_service.refresh_accounts, [direct_at])
+                            except Exception:
+                                pass
+                            acc = account_service.get_account(direct_at)
+                            acc_id = _clean_text((acc or {}).get("management_id"))
+                            if acc_id:
+                                updated_ids.append(acc_id)
+                            added += 1
+                            account_service.update_refresh_progress(
+                                progress_id,
+                                direct_at,
+                                acc_payload,
+                                account_id=acc_id or email,
+                                account_label=email,
+                                action="login_2fa",
+                                event_status="success",
+                                event_message=f"自带 Access Token 有效，已免开浏览器极速直接入库成功 (0 秒)",
+                            )
+                            continue
+                        except Exception as direct_err:
+                            # 若自带 AT 已过期失效，降级使用账号密码 + 2FA 无头登录重新换取新 Token
+                            pass
+
                     # 动态派生隔离的粘性代理（实现登录一个账号自动切一个独立出口 IP，且同一账号保持会话粘性）
                     account_proxy = derive_isolated_proxy(proxy_to_use, email)
                     try:
